@@ -1421,6 +1421,9 @@ void DB_read_queries(void)
 				break;
 		}
 
+		log_debug(DEBUG_DATABASE, "Imported query %d: time=%f, type=%d, status=%d, domain='%s', client='%s'",
+		          queryIndex, queryTimeStamp, type, status, domainname, clientIP);
+
 		if(imported_queries % 10000 == 0)
 			log_info("  %zu queries parsed...", imported_queries);
 

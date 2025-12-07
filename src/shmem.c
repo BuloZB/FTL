@@ -1197,11 +1197,6 @@ queriesData *_getQuery(const unsigned int queryID, const bool checkMagic, const 
 	if(!check_range(queryID, counters->queries_MAX, "query", func, line, file))
 		return NULL;
 
-	// May have been recycled, do not return recycled queries if we are checking
-	// the magic byte
-	if(checkMagic && queries[queryID].magic == 0x00)
-		return NULL;
-
 	// Check magic byte
 	if(check_magic(queryID, checkMagic, queries[queryID].magic, "query", func, line, file))
 		return &queries[queryID];

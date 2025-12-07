@@ -227,7 +227,8 @@ static void recycle(void)
 	free(domain_used);
 	free(cache_used);
 
-	// Scan number of recycled clients and domains if in debug mode
+	// Scan number of recycled clients, domains, and cache entries if in
+	// debug mode
 	if(config.debug.gc.v.b)
 	{
 		unsigned int free_domains = 0, free_clients = 0, free_cache = 0;
