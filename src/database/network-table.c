@@ -1757,7 +1757,7 @@ bool updateMACVendorRecords(sqlite3 *db)
 	}
 
 	bool success = false;
-	sqlite3_stmt *stmt = NULL;
+	sqlite3_stmt *stmt = NULL, *stmt2 = NULL;
 	const char *selectstr = "SELECT id,hwaddr FROM network;";
 	int rc = sqlite3_prepare_v2(db, selectstr, -1, &stmt, NULL);
 	if(rc != SQLITE_OK)
@@ -1766,7 +1766,6 @@ bool updateMACVendorRecords(sqlite3 *db)
 		goto updateMACVendorRecords_end;
 	}
 
-	sqlite3_stmt *stmt2 = NULL;
 	while((rc = sqlite3_step(stmt)) == SQLITE_ROW)
 	{
 		const int id = sqlite3_column_int(stmt, 0);

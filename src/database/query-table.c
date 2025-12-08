@@ -605,7 +605,7 @@ static bool count_queries_on_disk(void)
 }
 
 // Read queries from the on-disk database into the in-memory database (after
-// restart, etc.). A transcation is already running when this function is called.
+// restart, etc.). A transaction is already running when this function is called.
 bool import_queries_from_disk(void)
 {
 	// Get time stamp 24 hours (or what was configured) in the past
