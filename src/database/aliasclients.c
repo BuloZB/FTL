@@ -117,6 +117,7 @@ bool import_aliasclients(sqlite3 *db)
 		{
 			log_err("import_aliasclients() - SQL error step: %s", sqlite3_errstr(rc));
 			checkFTLDBrc(rc);
+			sqlite3_finalize(stmt);
 			return false;
 		}
 
@@ -129,6 +130,7 @@ bool import_aliasclients(sqlite3 *db)
 		{
 			log_err("Memory error in import_aliasclients()");
 			checkFTLDBrc(rc);
+			sqlite3_finalize(stmt);
 			return false;
 		}
 

@@ -371,8 +371,8 @@ update_netDB_name_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement
-	sqlite3_reset(query_stmt);
-	sqlite3_finalize(query_stmt);
+	if(query_stmt != NULL)
+		sqlite3_finalize(query_stmt);
 
 	return success;
 }
@@ -516,8 +516,8 @@ add_netDB_network_address_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement
-	sqlite3_reset(query_stmt);
-	sqlite3_finalize(query_stmt);
+	if(query_stmt != NULL)
+		sqlite3_finalize(query_stmt);
 
 	return success;
 }
@@ -619,8 +619,8 @@ insert_netDB_device_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement
-	sqlite3_reset(query_stmt);
-	sqlite3_finalize(query_stmt);
+	if(query_stmt != NULL)
+		sqlite3_finalize(query_stmt);
 
 	return success;
 }
@@ -701,8 +701,8 @@ unmock_netDB_device_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement
-	sqlite3_reset(query_stmt);
-	sqlite3_finalize(query_stmt);
+	if(query_stmt != NULL)
+		sqlite3_finalize(query_stmt);
 
 	return success;
 }
@@ -776,8 +776,8 @@ update_netDB_interface_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement
-	sqlite3_reset(query_stmt);
-	sqlite3_finalize(query_stmt);
+	if(query_stmt != NULL)
+		sqlite3_finalize(query_stmt);
 
 	return true;
 }
@@ -1620,11 +1620,9 @@ unify_hwaddr_end:
 	if(!success)
 		checkFTLDBrc(rc);
 
-	// Reset statement
-	sqlite3_reset(stmt);
-
 	// Finalize statement
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 
 	// End transaction
 	SQL_bool(db, "COMMIT");
@@ -1728,8 +1726,8 @@ getMACVendor_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement and close database
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 	sqlite3_close(macvendor_db);
 
 	log_debug(DEBUG_ARP, "MAC Vendor lookup for %s returned \"%s\"", hwaddr, vendor);
@@ -1768,6 +1766,7 @@ bool updateMACVendorRecords(sqlite3 *db)
 		goto updateMACVendorRecords_end;
 	}
 
+	sqlite3_stmt *stmt2 = NULL;
 	while((rc = sqlite3_step(stmt)) == SQLITE_ROW)
 	{
 		const int id = sqlite3_column_int(stmt, 0);
@@ -1777,7 +1776,6 @@ bool updateMACVendorRecords(sqlite3 *db)
 		getMACVendor((char*)sqlite3_column_text(stmt, 1), vendor);
 
 		// Prepare statement
-		sqlite3_stmt *stmt2 = NULL;
 		const char *updatestr = "UPDATE network SET macVendor = ?1 WHERE id = ?2";
 		rc = sqlite3_prepare_v2(db, updatestr, -1, &stmt2, NULL);
 		if(rc != SQLITE_OK)
@@ -1805,6 +1803,10 @@ bool updateMACVendorRecords(sqlite3 *db)
 		if(rc != SQLITE_DONE)
 			goto updateMACVendorRecords_end;
 
+		// Finalize statement2 for next iteration
+		sqlite3_finalize(stmt2);
+		stmt2 = NULL;
+
 	}
 	if(rc != SQLITE_DONE)
 	{
@@ -1819,11 +1821,11 @@ updateMACVendorRecords_end:
 	if(!success)
 		checkFTLDBrc(rc);
 
-	// Reset statement
-	sqlite3_reset(stmt);
-
-	// Finalize statement
-	sqlite3_finalize(stmt);
+	// Finalize statement2
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
+	if(stmt2 != NULL)
+	sqlite3_finalize(stmt2);
 
 	return success;
 }
@@ -1898,8 +1900,8 @@ getMACfromIP_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement and close database handle
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 
 	if(db_opened)
 		dbclose(&db);
@@ -1984,8 +1986,8 @@ getAliasclientIDfromIP_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement and close database handle
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 
 	if(db_opened)
 		dbclose(&db);
@@ -2065,8 +2067,8 @@ bool getNameFromIP(sqlite3 *db, char hostn[MAXDOMAINLEN], const char *ipaddr)
 	}
 
 	// Finalize statement
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 
 	// Return here if we found the name
 	if(got_name)
@@ -2139,8 +2141,8 @@ getNameFromIP_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement and close database handle (if opened)
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 
 	if(db_opened)
 		dbclose(&db);
@@ -2222,8 +2224,8 @@ getNameFromMAC_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement and close database handle
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 
 	dbclose(&db);
 	return got_name;
@@ -2304,8 +2306,8 @@ getIfaceFromIP_end:
 		checkFTLDBrc(rc);
 
 	// Finalize statement and close database handle
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 
 	if(db_opened)
 		dbclose(&db);
@@ -2511,8 +2513,8 @@ bool networkTable_deleteDevice(sqlite3 *db, const int id, int *deleted, const ch
 networkTable_deleteDevice_end:
 
 	// Finalize statement
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 
 	return success;
 }

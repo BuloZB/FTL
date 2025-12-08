@@ -397,8 +397,6 @@ static int _add_message(const enum message_type type,
 			type, message, sqlite3_errstr(rc));
 		goto end_of_add_message;
 	}
-	sqlite3_clear_bindings(stmt);
-	sqlite3_reset(stmt);
 	sqlite3_finalize(stmt);
 	stmt = NULL;
 
@@ -461,7 +459,6 @@ static int _add_message(const enum message_type type,
 		{
 			log_err("add_message(type=%u, message=%s) - Failed to bind argument %zu (type %u): %s",
 			        type, message, 3 + j, datatype, sqlite3_errstr(rc));
-			sqlite3_reset(stmt);
 			sqlite3_finalize(stmt);
 			checkFTLDBrc(rc);
 			va_end(ap);
@@ -485,8 +482,6 @@ end_of_add_message: // Close database connection
 	// Final database handling
 	if(stmt != NULL)
 	{
-		sqlite3_clear_bindings(stmt);
-		sqlite3_reset(stmt);
 		sqlite3_finalize(stmt);
 
 		// Get row ID of the newly added message
@@ -538,7 +533,6 @@ bool delete_message(cJSON *ids, int *deleted)
 		*deleted += sqlite3_changes(db);
 
 		sqlite3_reset(res);
-		sqlite3_clear_bindings(res);
 	}
 	sqlite3_finalize(res);
 
@@ -1052,7 +1046,8 @@ int count_messages(void)
 	count = sqlite3_column_int(stmt, 0);
 
 end_of_count_messages: // Close database connection
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 	dbclose(&db);
 
 	return count;
@@ -1342,7 +1337,8 @@ bool format_messages(cJSON *array)
 	}
 
 end_of_format_message: // Close database connection
-	sqlite3_finalize(stmt);
+	if(stmt != NULL)
+		sqlite3_finalize(stmt);
 	dbclose(&db);
 
 	return true;

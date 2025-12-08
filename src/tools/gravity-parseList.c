@@ -269,6 +269,7 @@ int gravity_parseList(const char *infile, const char *outfile, const char *adlis
 		printf("%s  %s Unable to bind adlistID to SQL statement to insert domains into database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -423,6 +424,7 @@ int gravity_parseList(const char *infile, const char *outfile, const char *adlis
 					printf("%s  %s Unable to bind domain to SQL statement to insert domains into database file %s\n",
 					over, cross, outfile);
 					fclose(fpin);
+					sqlite3_finalize(stmt);
 					sqlite3_close(db);
 					return EXIT_FAILURE;
 				}
@@ -430,6 +432,7 @@ int gravity_parseList(const char *infile, const char *outfile, const char *adlis
 				{
 					printf("%s  %s Unable to insert domain into database file %s\n", over, cross, outfile);
 					fclose(fpin);
+					sqlite3_finalize(stmt);
 					sqlite3_close(db);
 					return EXIT_FAILURE;
 				}
@@ -454,6 +457,7 @@ int gravity_parseList(const char *infile, const char *outfile, const char *adlis
 					printf("%s  %s Unable to bind domain to SQL statement to insert domains into database file %s\n",
 					over, cross, outfile);
 					fclose(fpin);
+					sqlite3_finalize(stmt);
 					sqlite3_close(db);
 					return EXIT_FAILURE;
 				}
@@ -461,6 +465,7 @@ int gravity_parseList(const char *infile, const char *outfile, const char *adlis
 				{
 					printf("%s  %s Unable to insert domain into database file %s\n", over, cross, outfile);
 					fclose(fpin);
+					sqlite3_finalize(stmt);
 					sqlite3_close(db);
 					return EXIT_FAILURE;
 				}
@@ -555,6 +560,7 @@ next_domain:
 		printf("%s  %s Unable to finalize SQL statement to insert domains into database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -569,6 +575,7 @@ next_domain:
 			printf("%s  %s Unable to update database properties in database file %s\n",
 			       over, cross, outfile);
 			fclose(fpin);
+			sqlite3_finalize(stmt);
 			sqlite3_close(db);
 			return EXIT_FAILURE;
 		}
@@ -589,6 +596,7 @@ next_domain:
 		printf("%s  %s Unable to prepare SQL statement to update adlist properties in database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -598,6 +606,7 @@ next_domain:
 		printf("%s  %s Unable to bind number of entries to SQL statement to update adlist properties in database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -606,6 +615,7 @@ next_domain:
 		printf("%s  %s Unable to bind number of invalid domains to SQL statement to update adlist properties in database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -614,6 +624,7 @@ next_domain:
 		printf("%s  %s Unable to bind number of ABP entries to SQL statement to update adlist properties in database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -622,6 +633,7 @@ next_domain:
 		printf("%s  %s Unable to bind adlist ID to SQL statement to update adlist properties in database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -630,6 +642,7 @@ next_domain:
 		printf("%s  %s Unable to update adlist properties in database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -638,6 +651,7 @@ next_domain:
 		printf("%s  %s Unable to finalize SQL statement to update adlist properties in database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -648,6 +662,7 @@ next_domain:
 		printf("%s  %s Unable to end transaction to insert domains into database file %s (database file may be corrupted)\n",
 		       over, cross, outfile);
 		fclose(fpin);
+		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -677,6 +692,7 @@ end_of_parseList:
 
 	// Close files
 	fclose(fpin);
+	sqlite3_finalize(stmt);
 	if(db != NULL)
 		sqlite3_close(db);
 

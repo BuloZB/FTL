@@ -348,6 +348,7 @@ static bool get_memdb_size(sqlite3 *db, size_t *memsize, int *queries)
 	{
 		log_err("init_memory_database(PRAGMA page_count): Step error: %s",
 		        sqlite3_errstr(rc));
+		sqlite3_finalize(stmt);
 		return false;
 	}
 	sqlite3_finalize(stmt);
@@ -369,6 +370,7 @@ static bool get_memdb_size(sqlite3 *db, size_t *memsize, int *queries)
 	{
 		log_err("init_memory_database(PRAGMA page_size): Step error: %s",
 			 sqlite3_errstr(rc));
+		sqlite3_finalize(stmt);
 		return false;
 	}
 	sqlite3_finalize(stmt);
@@ -1476,17 +1478,18 @@ void DB_read_queries(void)
 		unlock_shm();
 #endif
 
-	if( rc != SQLITE_DONE )
+	if( rc == SQLITE_DONE )
+	{
+		db_import_done = true;
+		log_info("Imported %zu queries from the long-term database", imported_queries);
+	}
+	else
 	{
 		log_err("DB_read_queries() - SQL error step: %s", sqlite3_errstr(rc));
-		return;
 	}
 
 	// Finalize SQLite3 statement
 	sqlite3_finalize(stmt);
-
-	db_import_done = true;
-	log_info("Imported %zu queries from the long-term database", imported_queries);
 }
 
 void init_disk_db_idx(void)
@@ -1651,11 +1654,9 @@ bool queries_to_database(void)
 		if(rc != SQLITE_DONE)
 		{
 			log_err("Encountered error while trying to store domain");
-			sqlite3_clear_bindings(domain_stmt);
 			sqlite3_reset(domain_stmt);
 			break;
 		}
-		sqlite3_clear_bindings(domain_stmt);
 		sqlite3_reset(domain_stmt);
 
 		// CLIENT
@@ -1668,7 +1669,6 @@ bool queries_to_database(void)
 
 		// Execute prepare client statement and check if successful
 		rc = sqlite3_step(client_stmt);
-		sqlite3_clear_bindings(client_stmt);
 		sqlite3_reset(client_stmt);
 		if(rc != SQLITE_DONE)
 		{
