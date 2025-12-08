@@ -863,8 +863,10 @@ bool _FTL_new_query(const unsigned int flags, const char *name,
 	query_set_status_init(query, QUERY_UNKNOWN);
 	query->domainID = domainID;
 	query->clientID = clientID;
-	// Initialize database field, will be set when the query is stored in the long-term DB
-	query->flags.database.stored = false;
+	// Initialize database fields
+	// This query is new and not yet known to the database
+	query->db = -1;
+	query->flags.database.imported = false;
 	query->flags.database.changed = true;
 	query->flags.complete = false;
 	query->response = querytimestamp;
@@ -895,8 +897,6 @@ bool _FTL_new_query(const unsigned int flags, const char *name,
 	// (domain,client,type) tuple was already seen before
 	query->cacheID = findCacheID(domainID, clientID, querytype, true);
 
-	// This query is new and not yet known to the database
-	query->db = -1;
 
 	// Increase DNS queries counter
 	counters->queries++;

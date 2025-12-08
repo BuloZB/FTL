@@ -1307,7 +1307,7 @@ void DB_read_queries(void)
 		query->flags.complete = true; // Mark as all information is available
 		query->flags.blocked = false;
 		query->flags.allowed = false;
-		query->flags.database.stored = true;
+		query->flags.database.imported = true;
 		query->flags.database.changed = false;
 		query->ede = -1; // EDE_UNSET == -1
 
@@ -1533,9 +1533,11 @@ bool queries_to_database(void)
 			log_err("Memory error in queries_to_database() when trying to access query %u", last_query);
 			return false;
 		}
-		if(query->timestamp < limit_timestamp)
+		if(query->timestamp < limit_timestamp || query->flags.database.imported)
 		{
-			// We found the first query older than our limit
+			// We found the first query older than our limit or
+			// queries that have been imported (we don't want to
+			// export them again)
 			last_query++;
 			break;
 		}
