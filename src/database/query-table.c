@@ -568,7 +568,7 @@ bool import_queries_from_disk(void)
 	bool okay = false;
 	const double now = double_time();
 	const double mintime = now - config.webserver.api.maxHistory.v.ui;
-	const char *querystr = "INSERT INTO query_storage SELECT * FROM disk.query_storage WHERE timestamp >= ?";
+	const char *querystr = "INSERT INTO query_storage SELECT * FROM disk.query_storage WHERE timestamp BETWEEN ? AND ?";
 
 	// Begin transaction
 	int rc;
@@ -582,15 +582,24 @@ bool import_queries_from_disk(void)
 	// Prepare SQLite3 statement
 	sqlite3_stmt *stmt = NULL;
 	log_debug(DEBUG_DATABASE, "Accessing in-memory database");
-	if((rc = sqlite3_prepare_v2(memdb, querystr, -1, &stmt, NULL)) != SQLITE_OK){
+	if((rc = sqlite3_prepare_v2(memdb, querystr, -1, &stmt, NULL)) != SQLITE_OK)
+	{
 		log_err("import_queries_from_disk(): SQL error prepare: %s", sqlite3_errstr(rc));
 		return false;
 	}
 
-	// Bind limit
+	// Bind lower limit
 	if((rc = sqlite3_bind_double(stmt, 1, mintime)) != SQLITE_OK)
 	{
 		log_err("import_queries_from_disk(): Failed to bind type mintime: %s", sqlite3_errstr(rc));
+		sqlite3_finalize(stmt);
+		return false;
+	}
+
+	// Bind upper limit
+	if((rc = sqlite3_bind_double(stmt, 2, now)) != SQLITE_OK)
+	{
+		log_err("import_queries_from_disk(): Failed to bind type now: %s", sqlite3_errstr(rc));
 		sqlite3_finalize(stmt);
 		return false;
 	}
@@ -1094,9 +1103,8 @@ bool create_addinfo_table(sqlite3 *db)
 void DB_read_queries(void)
 {
 	// Prepare request
-	// Get time stamp 24 hours in the past
-	const double now = double_time();
-	const double mintime = now - config.webserver.api.maxHistory.v.ui;
+	// Filtering to the history window has already happened in
+	// import_queries_from_disk()
 	const char *querystr = "SELECT id,"\
 	                              "timestamp,"\
 	                              "type,"\
@@ -1108,7 +1116,7 @@ void DB_read_queries(void)
 	                              "reply_type,"\
 	                              "reply_time,"\
 	                              "dnssec "\
-	                       "FROM queries WHERE timestamp >= ?";
+	                       "FROM queries";
 
 	// Only try to import from database if it is known to not be broken
 	if(FTLDBerror())
@@ -1126,14 +1134,6 @@ void DB_read_queries(void)
 		return;
 	}
 
-	// Bind limit
-	if((rc = sqlite3_bind_double(stmt, 1, mintime)) != SQLITE_OK)
-	{
-		log_err("DB_read_queries() - Failed to bind mintime: %s", sqlite3_errstr(rc));
-		sqlite3_finalize(stmt);
-		return;
-	}
-
 	// Loop through returned database rows
 	size_t imported_queries = 0;
 	while((rc = sqlite3_step(stmt)) == SQLITE_ROW)
@@ -1145,11 +1145,6 @@ void DB_read_queries(void)
 		{
 			log_warn("Database: TIMESTAMP of query should be larger than 01/01/2017 but is %f (DB ID %lli)",
 			         queryTimeStamp, dbID);
-			continue;
-		}
-		if(queryTimeStamp > now)
-		{
-			log_debug(DEBUG_DATABASE, "Skipping query logged in the future (%f > %f)", queryTimeStamp, now);
 			continue;
 		}
 
