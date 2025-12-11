@@ -272,7 +272,7 @@ static unsigned char message_blob_types[MAX_MESSAGE][5] =
 bool create_message_table(sqlite3 *db)
 {
 	// Start transaction
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// The blob fields can hold arbitrary data. Their type is specified through the type.
 	SQL_bool(db, "CREATE TABLE message ( id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -293,16 +293,14 @@ bool create_message_table(sqlite3 *db)
 	}
 
 	// End transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
 
 // Flush message table
-bool flush_message_table(void)
+bool flush_message_table(sqlite3 *memdb)
 {
-	sqlite3 *memdb = get_memdb();
-
 	// Flush message table
 	SQL_bool(memdb, "DELETE FROM disk.message;");
 

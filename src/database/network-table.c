@@ -37,7 +37,7 @@ bool create_network_table(sqlite3 *db)
 		return false;
 
 	// Start transaction
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Create network table in the database
 	SQL_bool(db, "CREATE TABLE network ( id INTEGER PRIMARY KEY NOT NULL, " \
@@ -58,7 +58,7 @@ bool create_network_table(sqlite3 *db)
 	}
 
 	// End transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -74,7 +74,7 @@ bool create_network_addresses_table(sqlite3 *db)
 	SQL_bool(db, "PRAGMA foreign_keys=OFF");
 
 	// Begin new transaction
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Create network_addresses table in the database
 	SQL_bool(db, "CREATE TABLE network_addresses ( network_id INTEGER NOT NULL, "\
@@ -121,7 +121,7 @@ bool create_network_addresses_table(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	// Re-enable foreign key enforcement
 	SQL_bool(db, "PRAGMA foreign_keys=ON");
@@ -140,7 +140,7 @@ bool create_network_addresses_with_names_table(sqlite3 *db)
 	SQL_bool(db, "PRAGMA foreign_keys=OFF");
 
 	// Begin new transaction
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Step 1: Create network_addresses table in the database
 	SQL_bool(db, "CREATE TABLE network_addresses_bck ( network_id INTEGER NOT NULL, "
@@ -197,7 +197,7 @@ bool create_network_addresses_with_names_table(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	// Re-enable foreign key enforcement
 	SQL_bool(db, "PRAGMA foreign_keys=ON");
@@ -1201,7 +1201,7 @@ void parse_neighbor_cache(sqlite3 *db)
 	// Start transaction to speed up database queries, to avoid that the
 	// database is locked by other processes and to allow for a rollback in
 	// case of an error
-	if(dbquery(db, "BEGIN TRANSACTION") != SQLITE_OK)
+	if(dbquery(db, "BEGIN") != SQLITE_OK)
 	{
 		// dbquery() above already logs the reason for why the query failed
 		log_warn("Starting first transaction failed during ARP parsing");
@@ -1524,7 +1524,7 @@ void parse_neighbor_cache(sqlite3 *db)
 
 	// Actually update the database
 	log_debug(DEBUG_ARP, "Network table: Committing changes to database");
-	if((rc = dbquery(db, "END TRANSACTION")) != SQLITE_OK)
+	if((rc = dbquery(db, "END")) != SQLITE_OK)
 	{
 		if( rc == SQLITE_BUSY )
 			log_warn("Storing devices in network table failed: %s", sqlite3_errstr(rc));
@@ -1563,7 +1563,7 @@ bool unify_hwaddr(sqlite3 *db)
 	                        "AND cnt > 1;";
 
 	// Start transaction
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Perform SQL query
 	bool success = false;
@@ -1625,7 +1625,7 @@ unify_hwaddr_end:
 		sqlite3_finalize(stmt);
 
 	// End transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return success;
 }

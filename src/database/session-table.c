@@ -39,7 +39,7 @@ bool create_session_table(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -60,7 +60,7 @@ bool add_session_app_column(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -81,7 +81,7 @@ bool add_session_cli_column(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -102,7 +102,7 @@ bool add_session_x_forwarded_for_column(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -283,7 +283,7 @@ bool restore_db_sessions(struct session *sessions, const uint16_t max_sessions)
 	sqlite3 *memdb = get_memdb();
 
 	// Remove expired sessions from database
-	SQL_bool(memdb, "DELETE FROM disk.session WHERE valid_until < strftime('%%s', 'now');");
+	SQL_bool(memdb, "DELETE FROM disk.session WHERE valid_until < unixepoch();");
 
 	// Get all sessions from database
 	sqlite3_stmt *stmt = NULL;

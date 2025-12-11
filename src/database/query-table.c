@@ -23,6 +23,8 @@
 #include "timers.h"
 // runGC()
 #include "gc.h"
+// flush_message_table()
+#include "database/message-table.h"
 
 static sqlite3 *_memdb = NULL;
 static bool store_in_database = false;
@@ -52,8 +54,8 @@ static sqlite3_stmt **stmts[] = { &query_stmt,
                                   &subtables_to_disk_stmts[4] };
 
 // Private prototypes
-static bool count_queries_on_disk(void);
-static void load_queries_from_disk(void);
+static bool count_queries_on_disk(sqlite3 *memdb);
+static void init_disk_db_idx(sqlite3 *memdb);
 
 // Set to non-zero integer if shared memory locking should be batched
 #define LOCK_BATCH_SZ 0
@@ -275,14 +277,28 @@ bool init_memory_database(void)
 		}
 	}
 
+	// Initialize in-memory database starting index
+	init_disk_db_idx(_memdb);
+
+	// Flush messages stored in the long-term database
+	flush_message_table(_memdb);
 
 	// Attach disk database
 	if(attached)
-		load_queries_from_disk();
+	{
+		// Compensate for possible jumps in time
+		runGC(time(NULL), NULL, false);
+
+		// Try to import queries from long-term database if available
+		// Skip if we are not supposed to load queries from disk
+		if(config.database.DBimport.v.b)
+			count_queries_on_disk(_memdb);
+	}
 	else
 		log_err("init_memory_database(): Failed to attach disk database");
 
-	// Everything went well
+	// Return that the in-memory database was initialized successfully, even
+	// when attach failed
 	return true;
 }
 
@@ -571,19 +587,13 @@ static int counted_queries = 0;
 // database until we have copied the data into the in-memory database in
 // import_queries_from_disk() below. Note that this function is subsequently
 // called from the database thread instead of the main process thread.
-static bool count_queries_on_disk(void)
+static bool count_queries_on_disk(sqlite3 *memdb)
 {
 	// Set time range for counting queries
 	import_until = double_time();
 	import_from = import_until - config.webserver.api.maxHistory.v.ui;
 
-	int rc;
-	sqlite3 *memdb = get_memdb();
-	if((rc = sqlite3_exec(memdb, "BEGIN TRANSACTION", NULL, NULL, NULL)) != SQLITE_OK)
-	{
-		log_err("import_queries_from_disk(): Cannot start transaction: %s", sqlite3_errstr(rc));
-		return false;
-	}
+	SQL_bool(memdb, "BEGIN");
 
 	counted_queries = db_query_int_from_until(memdb,
 	                                                "SELECT COUNT(*) FROM disk.query_storage "
@@ -685,11 +695,7 @@ bool import_queries_from_disk(void)
 	}
 
 	// End transaction
-	if((rc = sqlite3_exec(memdb, "END TRANSACTION", NULL, NULL, NULL)) != SQLITE_OK)
-	{
-		log_err("import_queries_from_disk(): Cannot end transaction: %s", sqlite3_errstr(rc));
-		return false;
-	}
+	SQL_bool(memdb, "END");
 
 	disk_db_num = get_number_of_queries_in_DB(memdb, "disk.query_storage", NULL);
 	mem_db_num = imported_queries;
@@ -722,7 +728,7 @@ bool export_queries_to_disk(const bool final)
 
 	// Start transaction
 	sqlite3 *memdb = get_memdb();
-	SQL_bool(memdb, "BEGIN TRANSACTION");
+	SQL_bool(memdb, "BEGIN");
 
 	// Only store queries if database.maxDBdays > 0
 	if(config.database.maxDBdays.v.ui > 0)
@@ -808,7 +814,7 @@ bool export_queries_to_disk(const bool final)
 	}
 
 	// End transaction
-	SQL_bool(memdb, "END TRANSACTION");
+	SQL_bool(memdb, "END");
 
 	log_debug(DEBUG_DATABASE, "Exported %u rows for disk.query_storage (took %.1f ms)",
 		  insertions, timer_elapsed_msec(DATABASE_WRITE_TIMER));
@@ -870,7 +876,7 @@ bool delete_old_queries_from_db(const bool use_memdb, const double mintime)
 bool add_additional_info_column(sqlite3 *db)
 {
 	// Start transaction
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Add column additinal_info to queries table
 	SQL_bool(db, "ALTER TABLE queries ADD COLUMN additional_info TEXT;");
@@ -883,7 +889,7 @@ bool add_additional_info_column(sqlite3 *db)
 	}
 
 	// End transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -891,7 +897,7 @@ bool add_additional_info_column(sqlite3 *db)
 bool add_query_storage_columns(sqlite3 *db)
 {
 	// Start transaction of database update
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Add additional columns to the query_storage table
 	SQL_bool(db, "ALTER TABLE query_storage ADD COLUMN reply_type INTEGER");
@@ -917,7 +923,7 @@ bool add_query_storage_columns(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -925,7 +931,7 @@ bool add_query_storage_columns(sqlite3 *db)
 bool add_query_storage_column_regex_id(sqlite3 *db)
 {
 	// Start transaction of database update
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Add additional column to the query_storage table
 	SQL_bool(db, "ALTER TABLE query_storage ADD COLUMN regex_id INTEGER");
@@ -949,7 +955,7 @@ bool add_query_storage_column_regex_id(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -957,7 +963,7 @@ bool add_query_storage_column_regex_id(sqlite3 *db)
 bool add_ftl_table_description(sqlite3 *db)
 {
 	// Start transaction of database update
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Add additional column to the ftl table
 	SQL_bool(db, "ALTER TABLE ftl ADD COLUMN description TEXT");
@@ -975,7 +981,7 @@ bool add_ftl_table_description(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -983,7 +989,7 @@ bool add_ftl_table_description(sqlite3 *db)
 bool rename_query_storage_column_regex_id(sqlite3 *db)
 {
 	// Start transaction of database update
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Rename column regex_id to list_id
 	SQL_bool(db, "ALTER TABLE query_storage RENAME COLUMN regex_id TO list_id;");
@@ -998,7 +1004,7 @@ bool rename_query_storage_column_regex_id(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -1006,7 +1012,7 @@ bool rename_query_storage_column_regex_id(sqlite3 *db)
 bool add_query_storage_column_ede(sqlite3 *db)
 {
 	// Start transaction of database update
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Add additional column to the query_storage table
 	SQL_bool(db, "ALTER TABLE query_storage ADD COLUMN ede INTEGER");
@@ -1030,7 +1036,7 @@ bool add_query_storage_column_ede(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -1080,7 +1086,7 @@ bool optimize_queries_table(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -1125,7 +1131,7 @@ bool create_addinfo_table(sqlite3 *db)
 	}
 
 	// Finish transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
@@ -1492,7 +1498,7 @@ void DB_read_queries(void)
 	sqlite3_finalize(stmt);
 }
 
-void init_disk_db_idx(void)
+static void init_disk_db_idx(sqlite3 *memdb)
 {
 	const char *querystr = "SELECT MAX(id) FROM disk.query_storage";
 
@@ -1504,9 +1510,6 @@ void init_disk_db_idx(void)
 		last_mem_db_idx = -1;
 		return;
 	}
-
-	// Get memory database pointer
-	sqlite3 *memdb = get_memdb();
 
 	// Prepare SQLite3 statement on first call
 	sqlite3_stmt *stmt = NULL;
@@ -1841,17 +1844,4 @@ bool queries_to_database(void)
 	}
 
 	return true;
-}
-
-static void load_queries_from_disk(void)
-{
-	// Compensate for possible jumps in time
-	runGC(time(NULL), NULL, false);
-
-	// Skip if we are not supposed to load queries from disk
-	if(!config.database.DBimport.v.b)
-		return;
-
-	// Try to import queries from long-term database if available
-	count_queries_on_disk();
 }

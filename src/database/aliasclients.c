@@ -23,7 +23,7 @@
 bool create_aliasclients_table(sqlite3 *db)
 {
 	// Start transaction
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Create aliasclient table in the database
 	SQL_bool(db, "CREATE TABLE aliasclient (id INTEGER PRIMARY KEY NOT NULL, " \
@@ -41,7 +41,7 @@ bool create_aliasclients_table(sqlite3 *db)
 	}
 
 	// End transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }

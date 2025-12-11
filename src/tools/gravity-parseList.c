@@ -657,7 +657,7 @@ next_domain:
 	}
 
 	// End transaction
-	if(sqlite3_exec(db, "END TRANSACTION", NULL, NULL, NULL) != SQLITE_OK)
+	if(sqlite3_exec(db, "END", NULL, NULL, NULL) != SQLITE_OK)
 	{
 		printf("%s  %s Unable to end transaction to insert domains into database file %s (database file may be corrupted)\n",
 		       over, cross, outfile);

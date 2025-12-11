@@ -219,7 +219,6 @@ int dbquery(sqlite3* db, const char *format, ...)
 
 	log_debug(DEBUG_DATABASE, "dbquery: \"%s\"", query);
 
-
 	int rc = sqlite3_exec(db, query, NULL, NULL, NULL);
 	if( rc != SQLITE_OK ){
 		log_err("ERROR: SQL query \"%s\" failed: %s (%s)",
@@ -241,7 +240,7 @@ int dbquery(sqlite3* db, const char *format, ...)
 static bool create_counter_table(sqlite3* db)
 {
 	// Start transaction
-	SQL_bool(db, "BEGIN TRANSACTION");
+	SQL_bool(db, "BEGIN");
 
 	// Create FTL table in the database (holds properties like database version, etc.)
 	SQL_bool(db, "CREATE TABLE counters ( id INTEGER PRIMARY KEY NOT NULL, value INTEGER NOT NULL );");
@@ -274,7 +273,7 @@ static bool create_counter_table(sqlite3* db)
 		return false;
 	}
 	// End transaction
-	SQL_bool(db, "COMMIT");
+	SQL_bool(db, "END");
 
 	return true;
 }
