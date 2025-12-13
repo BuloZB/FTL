@@ -1465,6 +1465,12 @@ void DB_read_queries(void)
 		log_err("DB_read_queries() - SQL error step: %s", sqlite3_errstr(rc));
 	}
 
+	if((int)imported_queries < counted_queries)
+	{
+		log_warn("Database %s has changed during import: Expected to import %i queries, but found only %zu. You may see harmless memory errors in the log.",
+		         config.files.database.v.s, counted_queries, imported_queries);
+	}
+
 	// Finalize SQLite3 statement
 	sqlite3_finalize(stmt);
 }
