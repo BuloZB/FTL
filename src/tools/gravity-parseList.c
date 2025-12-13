@@ -550,20 +550,20 @@ next_domain:
 		}
 	}
 
-	// Skip to end of parseList if we are only checking the list
-	if(checkOnly)
-		goto end_of_parseList;
-
 	// Finalize SQL statement
 	if(sqlite3_finalize(stmt) != SQLITE_OK)
 	{
 		printf("%s  %s Unable to finalize SQL statement to insert domains into database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
-		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
+	stmt = NULL;
+
+	// Skip to end of parseList if we are only checking the list
+	if(checkOnly)
+		goto end_of_parseList;
 
 	// Update database properties
 	// Are ABP patterns used?
@@ -575,7 +575,6 @@ next_domain:
 			printf("%s  %s Unable to update database properties in database file %s\n",
 			       over, cross, outfile);
 			fclose(fpin);
-			sqlite3_finalize(stmt);
 			sqlite3_close(db);
 			return EXIT_FAILURE;
 		}
@@ -596,7 +595,6 @@ next_domain:
 		printf("%s  %s Unable to prepare SQL statement to update adlist properties in database file %s\n",
 		       over, cross, outfile);
 		fclose(fpin);
-		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -662,7 +660,6 @@ next_domain:
 		printf("%s  %s Unable to end transaction to insert domains into database file %s (database file may be corrupted)\n",
 		       over, cross, outfile);
 		fclose(fpin);
-		sqlite3_finalize(stmt);
 		sqlite3_close(db);
 		return EXIT_FAILURE;
 	}
@@ -692,7 +689,6 @@ end_of_parseList:
 
 	// Close files
 	fclose(fpin);
-	sqlite3_finalize(stmt);
 	if(db != NULL)
 		sqlite3_close(db);
 
