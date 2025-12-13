@@ -593,8 +593,6 @@ static bool count_queries_on_disk(sqlite3 *memdb)
 	import_until = double_time();
 	import_from = import_until - config.webserver.api.maxHistory.v.ui;
 
-	SQL_bool(memdb, "BEGIN");
-
 	counted_queries = db_query_int_from_until(memdb,
 	                                                "SELECT COUNT(*) FROM disk.query_storage "
 	                                                "WHERE timestamp BETWEEN ? AND ?",
@@ -693,9 +691,6 @@ bool import_queries_from_disk(void)
 		imported[i] = sqlite3_changes(memdb);
 		log_debug(DEBUG_DATABASE, "Imported %i rows from disk.%s", imported[i], subtable_names[i]);
 	}
-
-	// End transaction
-	SQL_bool(memdb, "END");
 
 	disk_db_num = get_number_of_queries_in_DB(memdb, "disk.query_storage", NULL);
 	mem_db_num = imported_queries;
