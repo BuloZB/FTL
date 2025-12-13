@@ -57,9 +57,6 @@ static sqlite3_stmt **stmts[] = { &query_stmt,
 static bool count_queries_on_disk(sqlite3 *memdb);
 static void init_disk_db_idx(sqlite3 *memdb);
 
-// Set to non-zero integer if shared memory locking should be batched
-#define LOCK_BATCH_SZ 0
-
 // Return the maximum ID of the in-memory database
 sqlite3_int64 __attribute__((pure)) get_max_db_idx(void)
 {
@@ -1242,16 +1239,9 @@ void DB_read_queries(void)
 		}
 		const enum dnssec_status dnssec = dnssec_int;
 
-#if LOCK_BATCH_SZ > 0
-		// Lock shared memory every 100 imported queries
-		if(imported_queries % 100 == 0 && imported_queries > 0)
-			unlock_shm();
-		if(imported_queries % 100 == 0)
-			lock_shm();
-#else
 		// Lock shared memory
 		lock_shm();
-#endif
+
 		const char *buffer = NULL;
 		int upstreamID = -1; // Default if not forwarded
 		// Try to extract the upstream from the "forward" column if non-empty
@@ -1280,9 +1270,7 @@ void DB_read_queries(void)
 			{
 				log_warn("REPLY_TIME value %f is invalid, ID = %lld, timestamp = %f",
 				         reply_time, dbID, queryTimeStamp);
-#if LOCK_BATCH_SZ == 0
 				unlock_shm();
-#endif
 				continue;
 			}
 		}
@@ -1294,9 +1282,7 @@ void DB_read_queries(void)
 		{
 			log_warn("Database %s has changed during import: Expected to import %i queries. Parts of the history may be missing.",
 			         config.files.database.v.s, counted_queries);
-#if LOCK_BATCH_SZ == 0
 			unlock_shm();
-#endif
 			break;
 		}
 
@@ -1319,9 +1305,7 @@ void DB_read_queries(void)
 				// Invalid query type
 				log_warn("Query type %d is invalid, ID = %lld, timestamp = %f",
 				         type, dbID, queryTimeStamp);
-#if LOCK_BATCH_SZ == 0
 				unlock_shm();
-#endif
 				continue;
 			}
 		}
@@ -1467,17 +1451,9 @@ void DB_read_queries(void)
 		if(imported_queries % 10000 == 0)
 			log_info("  %zu queries parsed...", imported_queries);
 
-#if LOCK_BATCH_SZ == 0
 		// Unlock shared memory
 		unlock_shm();
-#endif
 	}
-
-#if LOCK_BATCH_SZ > 0
-	// Unlock shared memory
-	if(imported_queries > 0)
-		unlock_shm();
-#endif
 
 	if( rc == SQLITE_DONE )
 	{
