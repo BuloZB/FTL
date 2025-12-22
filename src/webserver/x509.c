@@ -12,10 +12,16 @@
 #include "log.h"
 #include "x509.h"
 
+#ifndef HAVE_MBEDTLS
+#define HAVE_MBEDTLS
+#endif
+
 #ifdef HAVE_MBEDTLS
-# include <mbedtls/rsa.h>
-# include <mbedtls/x509.h>
+# ifndef MBEDTLS_MPI_INIT
+# define MBEDTLS_MPI_INIT { 0, 1, 0 }
+# endif
 # include <mbedtls/x509_crt.h>
+# include <mbedtls/pk.h>
 
 // We enforce at least mbedTLS v3.5.0 if we use it
 #if MBEDTLS_VERSION_NUMBER < 0x03050000
@@ -23,163 +29,45 @@
 #endif
 
 #define RSA_KEY_SIZE 4096
+#define EC_KEY_SIZE 384
 #define BUFFER_SIZE 16000
+#define PIHOLE_ISSUER "CN=pi.hole,O=Pi-hole,C=DE"
 
-static bool read_id_file(const char *filename, char *buffer, size_t buffer_size)
-{
-	FILE *f = fopen(filename, "r");
-	if(f == NULL)
-		return false;
-
-	if(fread(buffer, 1, buffer_size, f) != buffer_size)
-	{
-		fclose(f);
-		return false;
-	}
-
-	fclose(f);
-	return true;
-}
-
-static mbedtls_entropy_context entropy = { 0 };
-static mbedtls_ctr_drbg_context ctr_drbg = { 0 };
-/**
- * @brief Initializes the entropy and random number generator.
- *
- * This function initializes the entropy and random number generator using
- * mbedtls library functions. It ensures that the initialization is performed
- * only once. Calling this function multiple times has no adverse effect.
- *
- * @return true if the initialization is successful or has already been
- * performed, false if there is an error during initialization.
- */
-bool init_entropy(void)
-{
-	// Check if already initialized
-	static bool initialized = false;
-	if(initialized)
-		return true;
-
-	mbedtls_ctr_drbg_init(&ctr_drbg);
-	mbedtls_entropy_init(&entropy);
-
-	// Get machine-id (this may fail in containers)
-	// https://www.freedesktop.org/software/systemd/man/latest/machine-id.html
-	char machine_id[128] = { 0 };
-	read_id_file("/etc/machine-id", machine_id, sizeof(machine_id));
-
-	// The boot_id random ID that is regenerated on each boot. As such it
-	// can be used to identify the local machine’s current boot. It’s
-	// universally available on any recent Linux kernel. It’s a good and
-	// safe choice if you need to identify a specific boot on a specific
-	// booted kernel.
-	// Read /proc/sys/kernel/random/boot_id and append it to machine_id
-	// The UUID is in format 8-4-4-4-12 and, hence, 36 characters long
-	char boot_id[37] = { 0 };
-	if(read_id_file("/proc/sys/kernel/random/boot_id", boot_id, sizeof(boot_id)))
-	{
-		boot_id[36] = '\0';
-		strncat(machine_id, boot_id, sizeof(machine_id) - strlen(machine_id) - 1);
-	}
-
-	// Initialize random number generator
-	int ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, (unsigned char*)machine_id, strlen(machine_id));
-	if(ret != 0)
-	{
-		log_err("mbedtls_ctr_drbg_seed returned %d\n", ret);
-		return false;
-	}
-
-	initialized = true;
-	return true;
-}
-
-/**
- * @brief Frees the resources allocated for entropy and CTR-DRBG contexts.
- *
- * This function releases the memory and resources associated with the
- * entropy and CTR-DRBG contexts, ensuring that they are properly cleaned up.
- * It should be called when these contexts are no longer needed to avoid
- * memory leaks.
- */
-void destroy_entropy(void)
-{
-	mbedtls_entropy_free(&entropy);
-	mbedtls_ctr_drbg_free(&ctr_drbg);
-}
-
-/**
- * @brief Generates random bytes using the CTR_DRBG (Counter mode Deterministic
- * Random Byte Generator).
- *
- * @param output Pointer to the buffer where the generated random bytes will be
- * stored.
- * @param len The number of random bytes to generate.
- * @return The number of bytes generated on success, or -1 on failure.
- */
-ssize_t drbg_random(unsigned char *output, size_t len)
-{
-	init_entropy();
-	const int ret = mbedtls_ctr_drbg_random(&ctr_drbg, output, len);
-	if(ret != 0)
-	{
-		log_err("mbedtls_ctr_drbg_random returned %d\n", ret);
-		return -1;
-	}
-
-	// Return number of bytes generated
-	return len;
-}
-
-// Generate private RSA key
-static int generate_private_key_rsa(mbedtls_pk_context *key,
-                                    unsigned char key_buffer[])
+// Generate private RSA or EC key
+static int generate_private_key(mbedtls_pk_context *pk_key, const bool rsa,
+                                unsigned char key_buffer[])
 {
 	int ret;
-	if((ret = mbedtls_pk_setup(key, mbedtls_pk_info_from_type(MBEDTLS_PK_RSA))) != 0)
+	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+	const psa_status_t status = psa_crypto_init();
+	if(status != PSA_SUCCESS)
 	{
-		printf("ERROR: mbedtls_pk_setup returned %d\n", ret);
+		log_err("Failed to initialize PSA crypto, returned %d\n", (int)status);
+		return CERT_CANNOT_PARSE_CERT;
+	}
+	psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_EXPORT | PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_DECRYPT);
+	psa_set_key_type(&attributes, rsa ? PSA_KEY_TYPE_RSA_KEY_PAIR : PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+	psa_set_key_bits(&attributes, rsa ? RSA_KEY_SIZE : EC_KEY_SIZE);
+
+	// Generate key
+	mbedtls_svc_key_id_t key = MBEDTLS_SVC_KEY_ID_INIT;
+	if((ret = psa_generate_key(&attributes, &key)) != PSA_SUCCESS) {
+		printf("ERROR: psa_generate_key failed: %d\n", ret);
 		return ret;
 	}
 
-	if((ret = mbedtls_rsa_gen_key(mbedtls_pk_rsa(*key), mbedtls_ctr_drbg_random,
-	                              &ctr_drbg, RSA_KEY_SIZE, 65537)) != 0)
-	{
-		printf("ERROR: mbedtls_rsa_gen_key returned %d\n", ret);
+	// Copy key to mbedtls_pk_context
+	if((ret = mbedtls_pk_copy_from_psa(key, pk_key)) != 0) {
+		printf("ERROR: mbedtls_pk_copy_from_psa returned %d\n", ret);
 		return ret;
 	}
+
+	// Destroy the key handle as we have copied the key
+	psa_reset_key_attributes(&attributes);
+	psa_destroy_key(key);
 
 	// Export key in PEM format
-	if ((ret = mbedtls_pk_write_key_pem(key, key_buffer, BUFFER_SIZE)) != 0) {
-		printf("ERROR: mbedtls_pk_write_key_pem returned %d\n", ret);
-		return ret;
-	}
-
-	return 0;
-}
-
-// Generate private EC key
-static int generate_private_key_ec(mbedtls_pk_context *key,
-                                   unsigned char key_buffer[])
-{
-	int ret;
-	// Setup key
-	if((ret = mbedtls_pk_setup(key, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY))) != 0)
-	{
-		printf("ERROR: mbedtls_pk_setup returned %d\n", ret);
-		return ret;
-	}
-
-	// Generate key SECP384R1 key (NIST P-384)
-	if((ret = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP384R1, mbedtls_pk_ec(*key),
-	                              mbedtls_ctr_drbg_random, &ctr_drbg)) != 0)
-	{
-		printf("ERROR: mbedtls_ecp_gen_key returned %d\n", ret);
-		return ret;
-	}
-
-	// Export key in PEM format
-	if ((ret = mbedtls_pk_write_key_pem(key, key_buffer, BUFFER_SIZE)) != 0) {
+	if ((ret = mbedtls_pk_write_key_pem(pk_key, key_buffer, BUFFER_SIZE)) != 0) {
 		printf("ERROR: mbedtls_pk_write_key_pem returned %d\n", ret);
 		return ret;
 	}
@@ -260,7 +148,7 @@ static bool write_to_file(const char *filename, const char *type, const char *su
 	return true;
 }
 
-bool generate_certificate(const char* certfile, bool rsa, const char *domain)
+bool generate_certificate(const char* certfile, bool rsa, const char *domain, const unsigned int validity_days)
 {
 	int ret;
 	mbedtls_x509write_cert ca_cert, server_cert;
@@ -275,38 +163,18 @@ bool generate_certificate(const char* certfile, bool rsa, const char *domain)
 	mbedtls_x509write_crt_init(&server_cert);
 	mbedtls_pk_init(&ca_key);
 	mbedtls_pk_init(&server_key);
-	init_entropy();
 
 	// Generate key
-	if(rsa)
+	printf("Generating %s key...\n", rsa ? "RSA" : "EC");
+	if((ret = generate_private_key(&ca_key, rsa, ca_key_buffer)) != 0)
 	{
-		// Generate RSA key
-		printf("Generating RSA key...\n");
-		if((ret = generate_private_key_rsa(&ca_key, ca_key_buffer)) != 0)
-		{
-			printf("ERROR: generate_private_key returned %d\n", ret);
-			return false;
-		}
-		if((ret = generate_private_key_rsa(&server_key, key_buffer)) != 0)
-		{
-			printf("ERROR: generate_private_key returned %d\n", ret);
-			return false;
-		}
+		printf("ERROR: generate_private_key returned %d\n", ret);
+		return false;
 	}
-	else
+	if((ret = generate_private_key(&server_key, rsa, key_buffer)) != 0)
 	{
-		// Generate EC key
-		printf("Generating EC key...\n");
-		if((ret = generate_private_key_ec(&ca_key, ca_key_buffer)) != 0)
-		{
-			printf("ERROR: generate_private_key_ec returned %d\n", ret);
-			return false;
-		}
-		if((ret = generate_private_key_ec(&server_key, key_buffer)) != 0)
-		{
-			printf("ERROR: generate_private_key_ec returned %d\n", ret);
-			return false;
-		}
+		printf("ERROR: generate_private_key returned %d\n", ret);
+		return false;
 	}
 
 	// Create string with random digits for unique serial number
@@ -322,13 +190,11 @@ bool generate_certificate(const char* certfile, bool rsa, const char *domain)
 	// certificate would be rejected by the browser as it would have the same
 	// serial number as the previous one and uniques is violated.
 	unsigned char serial1[16] = { 0 }, serial2[16] = { 0 };
-	mbedtls_ctr_drbg_random(&ctr_drbg, serial1, sizeof(serial1));
 	for(unsigned int i = 0; i < sizeof(serial1) - 1; i++)
-		serial1[i] = '0' + (serial1[i] % 10);
+		serial1[i] = '0' + (rand() % 10);
 	serial1[sizeof(serial1) - 1] = '\0';
-	mbedtls_ctr_drbg_random(&ctr_drbg, serial2, sizeof(serial2));
 	for(unsigned int i = 0; i < sizeof(serial2) - 1; i++)
-		serial2[i] = '0' + (serial2[i] % 10);
+		serial2[i] = '0' + (rand() % 10);
 	serial2[sizeof(serial2) - 1] = '\0';
 
 	// Create validity period
@@ -339,7 +205,9 @@ bool generate_certificate(const char* certfile, bool rsa, const char *domain)
 	char not_before[16] = { 0 };
 	char not_after[16] = { 0 };
 	strftime(not_before, sizeof(not_before), "%Y%m%d%H%M%S", tm);
-	tm->tm_year += 30; // 30 years from now
+	tm->tm_mday += validity_days > 0 ? validity_days : 30*365; // If no validity is specified, use 30 years
+	tm->tm_isdst = -1; // Not set, let mktime() determine it
+	mktime(tm); // normalize time
 	// Check for leap year, and adjust the date accordingly
 	const bool isLeapYear = tm->tm_year % 4 == 0 && (tm->tm_year % 100 != 0 || tm->tm_year % 400 == 0);
 	tm->tm_mday = tm->tm_mon == 1 && tm->tm_mday == 29 && !isLeapYear ? 28 : tm->tm_mday;
@@ -355,14 +223,13 @@ bool generate_certificate(const char* certfile, bool rsa, const char *domain)
 	mbedtls_x509write_crt_set_subject_key_identifier(&ca_cert);
 	mbedtls_x509write_crt_set_issuer_key(&ca_cert, &ca_key);
 	mbedtls_x509write_crt_set_authority_key_identifier(&ca_cert);
-	mbedtls_x509write_crt_set_issuer_name(&ca_cert, "CN=pi.hole,O=Pi-hole,C=DE");
-	mbedtls_x509write_crt_set_subject_name(&ca_cert, "CN=pi.hole,O=Pi-hole,C=DE");
+	mbedtls_x509write_crt_set_issuer_name(&ca_cert, PIHOLE_ISSUER);
+	mbedtls_x509write_crt_set_subject_name(&ca_cert, PIHOLE_ISSUER);
 	mbedtls_x509write_crt_set_validity(&ca_cert, not_before, not_after);
 	mbedtls_x509write_crt_set_basic_constraints(&ca_cert, 1, -1);
 
 	// Export CA in PEM format
-	if((ret = mbedtls_x509write_crt_pem(&ca_cert, ca_buffer, sizeof(ca_buffer),
-	                                    mbedtls_ctr_drbg_random, &ctr_drbg)) != 0)
+	if((ret = mbedtls_x509write_crt_pem(&ca_cert, ca_buffer, sizeof(ca_buffer))) != 0)
 	{
 		printf("ERROR: mbedtls_x509write_crt_pem (CA) returned %d\n", ret);
 		return false;
@@ -378,7 +245,7 @@ bool generate_certificate(const char* certfile, bool rsa, const char *domain)
 	mbedtls_x509write_crt_set_issuer_key(&server_cert, &ca_key);
 	mbedtls_x509write_crt_set_authority_key_identifier(&server_cert);
 	// subject name set below
-	mbedtls_x509write_crt_set_issuer_name(&server_cert, "CN=pi.hole,O=Pi-hole,C=DE");
+	mbedtls_x509write_crt_set_issuer_name(&server_cert, PIHOLE_ISSUER);
 	mbedtls_x509write_crt_set_validity(&server_cert, not_before, not_after);
 	mbedtls_x509write_crt_set_basic_constraints(&server_cert, 0, -1);
 
@@ -424,8 +291,7 @@ bool generate_certificate(const char* certfile, bool rsa, const char *domain)
 		printf("mbedtls_x509write_crt_set_subject_alternative_name returned %d\n", ret);
 
 	// Export certificate in PEM format
-	if((ret = mbedtls_x509write_crt_pem(&server_cert, cert_buffer, sizeof(cert_buffer),
-	                                    mbedtls_ctr_drbg_random, &ctr_drbg)) != 0)
+	if((ret = mbedtls_x509write_crt_pem(&server_cert, cert_buffer, sizeof(cert_buffer))) != 0)
 	{
 		printf("ERROR: mbedtls_x509write_crt_pem returned %d\n", ret);
 		return false;
@@ -469,24 +335,93 @@ static bool check_wildcard_domain(const char *domain, char *san, const size_t sa
 	return strncasecmp(wild_domain, san + 1, san_len - 1) == 0;
 }
 
+static bool search_domain(mbedtls_x509_crt *crt, mbedtls_x509_sequence *sans, const char *domain)
+{
+	bool found = false;
+	// Loop over all SANs
+	while(sans != NULL)
+	{
+		// Parse the SAN
+		mbedtls_x509_subject_alternative_name san = { 0 };
+		const int ret = mbedtls_x509_parse_subject_alt_name(&sans->buf, &san);
+
+		// Check if SAN is used (otherwise ret < 0, e.g.,
+		// MBEDTLS_ERR_X509_FEATURE_UNAVAILABLE) and if it is a
+		// DNS name, skip otherwise
+		if(ret < 0 || san.type != MBEDTLS_X509_SAN_DNS_NAME)
+			goto next_san;
+
+		// Check if the SAN matches the domain
+		// Attention: The SAN is not NUL-terminated, so we need to
+		//            use the length field
+		if(strncasecmp(domain, (char*)san.san.unstructured_name.p, san.san.unstructured_name.len) == 0)
+		{
+			found = true;
+			// Free resources
+			mbedtls_x509_free_subject_alt_name(&san);
+			break;
+		}
+
+		// Also check if the SAN is a wildcard domain and if the domain
+		// matches the wildcard
+		if(check_wildcard_domain(domain, (char*)san.san.unstructured_name.p, san.san.unstructured_name.len))
+		{
+			found = true;
+			// Free resources
+			mbedtls_x509_free_subject_alt_name(&san);
+			break;
+		}
+next_san:
+		// Free resources
+		mbedtls_x509_free_subject_alt_name(&san);
+
+		// Go to next SAN
+		sans = sans->next;
+	}
+
+	if(found)
+		return true;
+
+	// Also check against the common name (CN) field
+	char subject[MBEDTLS_X509_MAX_DN_NAME_SIZE];
+	const size_t subject_len = mbedtls_x509_dn_gets(subject, sizeof(subject), &(crt->subject));
+	if(subject_len > 0)
+	{
+		// Check subjects prefixed with "CN="
+		if(subject_len > 3 && strncasecmp(subject, "CN=", 3) == 0)
+		{
+			// Check subject + 3 to skip the prefix
+			if(strncasecmp(domain, subject + 3, subject_len - 3) == 0)
+				found = true;
+			// Also check if the subject is a wildcard domain
+			else if(check_wildcard_domain(domain, subject + 3, subject_len - 3))
+				found = true;
+		}
+		// Check subject == "<domain>"
+		else if(strcasecmp(domain, subject) == 0)
+			found = true;
+		// Also check if the subject is a wildcard domain and if the domain
+		// matches the wildcard
+		else if(check_wildcard_domain(domain, subject, subject_len))
+			found = true;
+	}
+
+	return found;
+}
+
+
 // This function reads a X.509 certificate from a file and prints a
 // human-readable representation of the certificate to stdout. If a domain is
 // specified, we only check if this domain is present in the certificate.
 // Otherwise, we print verbose human-readable information about the certificate
 // and about the private key (if requested).
-enum cert_check read_certificate(const char* certfile, const char *domain, const bool private_key)
+enum cert_check read_certificate(const char *certfile, const char *domain, const bool private_key)
 {
 	if(certfile == NULL && domain == NULL)
 	{
 		log_err("No certificate file specified\n");
 		return CERT_FILE_NOT_FOUND;
 	}
-
-	mbedtls_x509_crt crt;
-	mbedtls_pk_context key;
-	mbedtls_x509_crt_init(&crt);
-	mbedtls_pk_init(&key);
-	init_entropy();
 
 	log_info("Reading certificate from %s ...", certfile);
 
@@ -497,14 +432,25 @@ enum cert_check read_certificate(const char* certfile, const char *domain, const
 		return CERT_FILE_NOT_FOUND;
 	}
 
+	const psa_status_t status = psa_crypto_init();
+	if(status != PSA_SUCCESS)
+	{
+		log_err("Failed to initialize PSA crypto, returned %d\n", (int)status);
+		return CERT_CANNOT_PARSE_CERT;
+	}
+
+	mbedtls_pk_context key;
+	mbedtls_pk_init(&key);
 	bool has_key = true;
-	int rc = mbedtls_pk_parse_keyfile(&key, certfile, NULL, mbedtls_ctr_drbg_random, &ctr_drbg);
+	int rc = mbedtls_pk_parse_keyfile(&key, certfile, NULL);
 	if (rc != 0)
 	{
 		log_info("No key found");
 		has_key = false;
 	}
 
+	mbedtls_x509_crt crt;
+	mbedtls_x509_crt_init(&crt);
 	rc = mbedtls_x509_crt_parse_file(&crt, certfile);
 	if (rc != 0)
 	{
@@ -514,195 +460,76 @@ enum cert_check read_certificate(const char* certfile, const char *domain, const
 
 	// Parse mbedtls_x509_parse_subject_alt_names()
 	mbedtls_x509_sequence *sans = &crt.subject_alt_names;
-	bool found = false;
+
+	// When a domain is specified, possibly return early
 	if(domain != NULL)
-	{
-		// Loop over all SANs
-		while(sans != NULL)
-		{
-			// Parse the SAN
-			mbedtls_x509_subject_alternative_name san = { 0 };
-			const int ret = mbedtls_x509_parse_subject_alt_name(&sans->buf, &san);
-
-			// Check if SAN is used (otherwise ret < 0, e.g.,
-			// MBEDTLS_ERR_X509_FEATURE_UNAVAILABLE) and if it is a
-			// DNS name, skip otherwise
-			if(ret < 0 || san.type != MBEDTLS_X509_SAN_DNS_NAME)
-				goto next_san;
-
-			// Check if the SAN matches the domain
-			// Attention: The SAN is not NUL-terminated, so we need to
-			//            use the length field
-			if(strncasecmp(domain, (char*)san.san.unstructured_name.p, san.san.unstructured_name.len) == 0)
-			{
-				found = true;
-				// Free resources
-				mbedtls_x509_free_subject_alt_name(&san);
-				break;
-			}
-
-			// Also check if the SAN is a wildcard domain and if the domain
-			// matches the wildcard
-			if(check_wildcard_domain(domain, (char*)san.san.unstructured_name.p, san.san.unstructured_name.len))
-			{
-				found = true;
-				// Free resources
-				mbedtls_x509_free_subject_alt_name(&san);
-				break;
-			}
-next_san:
-			// Free resources
-			mbedtls_x509_free_subject_alt_name(&san);
-
-			// Go to next SAN
-			sans = sans->next;
-		}
-
-		// Also check against the common name (CN) field
-		char subject[MBEDTLS_X509_MAX_DN_NAME_SIZE];
-		const size_t subject_len = mbedtls_x509_dn_gets(subject, sizeof(subject), &crt.subject);
-		if(subject_len > 0)
-		{
-			// Check subjects prefixed with "CN="
-			if(subject_len > 3 && strncasecmp(subject, "CN=", 3) == 0)
-			{
-				// Check subject + 3 to skip the prefix
-				if(strncasecmp(domain, subject + 3, subject_len - 3) == 0)
-					found = true;
-				// Also check if the subject is a wildcard domain
-				else if(check_wildcard_domain(domain, subject + 3, subject_len - 3))
-					found = true;
-			}
-			// Check subject == "<domain>"
-			else if(strcasecmp(domain, subject) == 0)
-				found = true;
-			// Also check if the subject is a wildcard domain and if the domain
-			// matches the wildcard
-			else if(check_wildcard_domain(domain, subject, subject_len))
-				found = true;
-		}
-
-
-		// Free resources
-		mbedtls_x509_crt_free(&crt);
-		mbedtls_pk_free(&key);
-		return found ? CERT_DOMAIN_MATCH : CERT_DOMAIN_MISMATCH;
-	}
+		return search_domain(&crt, sans, domain) ? CERT_DOMAIN_MATCH : CERT_DOMAIN_MISMATCH;
 
 	// else: Print verbose information about the certificate
 	char certinfo[BUFFER_SIZE] = { 0 };
 	mbedtls_x509_crt_info(certinfo, BUFFER_SIZE, "  ", &crt);
-	puts("Certificate (X.509):\n");
+	puts("Certificate (X.509):");
 	puts(certinfo);
 
 	if(!private_key || !has_key)
 		goto end;
 
+	psa_key_attributes_t key_attributes = PSA_KEY_ATTRIBUTES_INIT;
+	mbedtls_pk_get_psa_attributes(&key, PSA_KEY_USAGE_DERIVE, &key_attributes);
+
 	puts("Private key:");
-	const char *keytype = mbedtls_pk_get_name(&key);
-	printf("  Type: %s\n", keytype);
-	mbedtls_pk_type_t pk_type = mbedtls_pk_get_type(&key);
-	if(pk_type == MBEDTLS_PK_RSA)
+	psa_key_type_t pk_type = psa_get_key_type(&key_attributes);
+	printf("  ID: %u\n", psa_get_key_id(&key_attributes));
+	const size_t key_bits = psa_get_key_bits(&key_attributes);
+	printf("  Keysize: %zu bits\n", key_bits);
+	printf("  Algorithm: %u\n", psa_get_key_algorithm(&key_attributes));
+	printf("  Lifetime: %u\n", psa_get_key_lifetime(&key_attributes));
+	if(PSA_KEY_TYPE_IS_RSA(pk_type))
 	{
-		mbedtls_rsa_context *rsa = mbedtls_pk_rsa(key);
-		printf("  RSA modulus: %zu bit\n", 8*mbedtls_rsa_get_len(rsa));
-		mbedtls_mpi E, N, P, Q, D;
-		mbedtls_mpi_init(&E); // E = public exponent (public)
-		mbedtls_mpi_init(&N); // N = P * Q (public)
-		mbedtls_mpi_init(&P); // P = prime factor 1 (private)
-		mbedtls_mpi_init(&Q); // Q = prime factor 2 (private)
-		mbedtls_mpi_init(&D); // D = private exponent (private)
-		mbedtls_mpi DP, DQ, QP;
-		mbedtls_mpi_init(&DP);
-		mbedtls_mpi_init(&DQ);
-		mbedtls_mpi_init(&QP);
-		if(mbedtls_rsa_export(rsa, &N, &P, &Q, &D, &E) != 0 ||
-		   mbedtls_rsa_export_crt(rsa, &DP, &DQ, &QP) != 0)
-		{
-			puts(" could not export RSA parameters\n");
-			return EXIT_FAILURE;
-		}
-		puts("  Core parameters:");
-		if(mbedtls_mpi_write_file("  Exponent:\n    E = 0x", &E, 16, NULL) != 0)
-		{
-			puts(" could not write MPI\n");
-			return EXIT_FAILURE;
-		}
-
-		if(mbedtls_mpi_write_file("  Modulus:\n    N = 0x", &N, 16, NULL) != 0)
-		{
-			puts(" could not write MPI\n");
-			return EXIT_FAILURE;
-		}
-
-		if(mbedtls_mpi_cmp_mpi(&P, &Q) >= 0)
-		{
-			if(mbedtls_mpi_write_file("  Prime factors:\n    P = 0x", &P, 16, NULL) != 0 ||
-			   mbedtls_mpi_write_file("    Q = 0x", &Q, 16, NULL) != 0)
-			{
-				puts(" could not write MPIs\n");
-				return EXIT_FAILURE;
-			}
-		}
-		else
-		{
-			if(mbedtls_mpi_write_file("  Prime factors:\n    Q = 0x", &Q, 16, NULL) != 0 ||
-			   mbedtls_mpi_write_file("\n    P = 0x", &P, 16, NULL) != 0)
-			{
-				puts(" could not write MPIs\n");
-				return EXIT_FAILURE;
-			}
-		}
-
-		if(mbedtls_mpi_write_file("  Private exponent:\n    D = 0x", &D, 16, NULL) != 0)
-		{
-			puts(" could not write MPI\n");
-			return EXIT_FAILURE;
-		}
-
-		mbedtls_mpi_free(&N);
-		mbedtls_mpi_free(&P);
-		mbedtls_mpi_free(&Q);
-		mbedtls_mpi_free(&D);
-		mbedtls_mpi_free(&E);
-
-		puts("  CRT parameters:");
-		if(mbedtls_mpi_write_file("  D mod (P-1):\n    DP = 0x", &DP, 16, NULL) != 0 ||
-		   mbedtls_mpi_write_file("  D mod (Q-1):\n    DQ = 0x", &DQ, 16, NULL) != 0 ||
-		   mbedtls_mpi_write_file("  Q^-1 mod P:\n    QP = 0x", &QP, 16, NULL) != 0)
-		{
-			puts(" could not write MPIs\n");
-			return EXIT_FAILURE;
-		}
-
-		mbedtls_mpi_free(&DP);
-		mbedtls_mpi_free(&DQ);
-		mbedtls_mpi_free(&QP);
-
+		printf("  Type: RSA (%s)\n\n", pk_type == PSA_KEY_TYPE_RSA_KEY_PAIR ? "key pair" : "public key only");
 	}
-	else if(pk_type == MBEDTLS_PK_ECKEY)
+	else if(PSA_KEY_TYPE_IS_ECC_KEY_PAIR(pk_type) || PSA_KEY_TYPE_IS_ECC_PUBLIC_KEY(pk_type))
 	{
-		mbedtls_ecp_keypair *ec = mbedtls_pk_ec(key);
-		mbedtls_ecp_curve_type ec_type = mbedtls_ecp_get_type(&ec->private_grp);
-		switch (ec_type)
+		printf("  Type: ECC (%s)\n", PSA_KEY_TYPE_IS_ECC_KEY_PAIR(pk_type) ? "key pair" : "public key only");
+		const psa_ecc_family_t ecc_family = PSA_KEY_TYPE_ECC_GET_FAMILY(pk_type);
+		switch(ecc_family)
 		{
-			case MBEDTLS_ECP_TYPE_NONE:
-				puts("  Curve type: Unknown");
+			case PSA_ECC_FAMILY_SECP_K1:
+				printf("  Curvetype: SEC Koblitz curve over prime fields (secp%zuk1)\n", key_bits);
 				break;
-			case MBEDTLS_ECP_TYPE_SHORT_WEIERSTRASS:
-				puts("  Curve type: Short Weierstrass (y^2 = x^3 + a x + b)");
+			case PSA_ECC_FAMILY_SECP_R1:
+				printf("  Curvetype: SEC random curve over prime fields (secp%zur1)\n", key_bits);
 				break;
-			case MBEDTLS_ECP_TYPE_MONTGOMERY:
-				puts("  Curve type: Montgomery (y^2 = x^3 + a x^2 + x)");
+			case PSA_ECC_FAMILY_SECP_R2:
+				printf("  Curve family: secp%zur2 is obsolete and not supported\n", key_bits);
+				break;
+			case PSA_ECC_FAMILY_SECT_K1:
+				printf("  Curvetype: SEC Koblitz curve over binary fields (sect%zuk1)\n", key_bits);
+				break;
+			case PSA_ECC_FAMILY_SECT_R1:
+				printf("  Curvetype: SEC random curve over binary fields (sect%zur1)\n", key_bits);
+				break;
+			case PSA_ECC_FAMILY_SECT_R2:
+				printf("  Curvetype: SEC additional random curve over binary fields (sect%zur2)\n", key_bits);
+				break;
+			case PSA_ECC_FAMILY_BRAINPOOL_P_R1:
+				printf("  Curvetype: Brainpool P random curve (brainpoolP%zur1)\n", key_bits);
+				break;
+			case PSA_ECC_FAMILY_MONTGOMERY:
+				printf("  Curvetype: Montgomery curve (Curve%s)\n", key_bits == 255 ? "25519" : key_bits == 448 ? "448" : "Unknown");
+				break;
+			case PSA_ECC_FAMILY_TWISTED_EDWARDS:
+				printf("  Curvetype: Twisted Edwards curve (Ed%s)\n", key_bits == 255 ? "25519" : key_bits == 448 ? "448" : "Unknown");
+				break;
+			default:
+				puts("  Curvetype: Unknown");
 				break;
 		}
-		const size_t bitlen = mbedtls_mpi_bitlen(&ec->private_d);
-		printf("  Bitlen:  %zu bit\n", bitlen);
-
-		mbedtls_mpi_write_file("  Private key:\n    D = 0x", &ec->private_d, 16, NULL);
-		mbedtls_mpi_write_file("  Public key:\n    X = 0x", &ec->MBEDTLS_PRIVATE(Q).MBEDTLS_PRIVATE(X), 16, NULL);
-		mbedtls_mpi_write_file("    Y = 0x", &ec->MBEDTLS_PRIVATE(Q).MBEDTLS_PRIVATE(Y), 16, NULL);
-		mbedtls_mpi_write_file("    Z = 0x", &ec->MBEDTLS_PRIVATE(Q).MBEDTLS_PRIVATE(Z), 16, NULL);
+		puts("");
+	}
+	else if(PSA_KEY_TYPE_IS_DH(pk_type))
+	{
+		printf("  Type: Diffie-Hellman (%s)\n\n", PSA_KEY_TYPE_IS_DH_KEY_PAIR(pk_type) ? "key pair" : "public key only");
 	}
 	else
 	{
@@ -728,28 +555,101 @@ end:
 	return CERT_OKAY;
 }
 
+/**
+ * @brief Checks if the certificate at the given file path is currently valid and will remain valid for at least the specified number of days.
+ *
+ * This function loads an X.509 certificate from the specified file, verifies that it is readable and parsable,
+ * and checks its validity period. It ensures that the certificate is already valid (not before date is in the past)
+ * and that it will not expire within the next `valid_for_at_least_days` days.
+ *
+ * @param certfile Path to the certificate file to check. If NULL, the function returns CERT_FILE_NOT_FOUND.
+ * @param valid_for_at_least_days The minimum number of days the certificate should remain valid from now.
+ *
+ * @return enum cert_check
+ *         - CERT_OKAY: Certificate is valid and will remain valid for at least the specified number of days.
+ *         - CERT_FILE_NOT_FOUND: Certificate file is not specified, does not exist, or is not readable.
+ *         - CERT_CANNOT_PARSE_CERT: Certificate file could not be parsed.
+ *         - CERT_NOT_YET_VALID: Certificate is not yet valid (valid_from is in the future).
+ *         - CERT_EXPIRES_SOON: Certificate will expire within the specified number of days.
+ */
+enum cert_check cert_currently_valid(const char *certfile, const time_t valid_for_at_least_days)
+{
+	// If no file was specified, we do not want to recreate it
+	if(certfile == NULL)
+		return CERT_FILE_NOT_FOUND;
+
+	mbedtls_x509_crt crt;
+	mbedtls_x509_crt_init(&crt);
+
+	// Check if the file exists and is readable
+	if(access(certfile, R_OK) != 0)
+	{
+		log_err("Could not read certificate file: %s", strerror(errno));
+		return CERT_FILE_NOT_FOUND;
+	}
+
+	int rc = mbedtls_x509_crt_parse_file(&crt, certfile);
+	if (rc != 0)
+	{
+		log_err("Cannot parse certificate: Error code %d", rc);
+		return CERT_CANNOT_PARSE_CERT;
+	}
+
+	// Compare validity of certificate
+	// - crt.valid_from needs to be in the past
+	// - crt.valid_to should be further away than at least two days
+	mbedtls_x509_time until = { 0 };
+	mbedtls_x509_time_gmtime(mbedtls_time(NULL) + valid_for_at_least_days * (24 * 3600), &until);
+	const bool is_valid_to = mbedtls_x509_time_cmp(&(crt.valid_to), &until) > 0;
+	const bool is_valid_from = mbedtls_x509_time_is_past(&(crt.valid_from));
+
+	// Free resources
+	mbedtls_x509_crt_free(&crt);
+
+	// Return result
+	if(!is_valid_from)
+		return CERT_NOT_YET_VALID;
+	if(!is_valid_to)
+		return CERT_EXPIRES_SOON;
+	return CERT_OKAY;
+}
+
+bool is_pihole_certificate(const char *certfile)
+{
+	// Check if the file exists and is readable
+	if(access(certfile, R_OK) != 0)
+	{
+		log_err("Could not read certificate file: %s", strerror(errno));
+		return false;
+	}
+
+	mbedtls_x509_crt crt;
+	mbedtls_x509_crt_init(&crt);
+
+	int rc = mbedtls_x509_crt_parse_file(&crt, certfile);
+	if (rc != 0)
+	{
+		log_err("Cannot parse certificate: Error code %d", rc);
+		return false;
+	}
+	// Check if the issuer is "pi.hole"
+	const bool is_pihole_issuer = strncasecmp((char*)crt.issuer.val.p, "pi.hole", crt.issuer.val.len) == 0;
+	// Check if the subject is "pi.hole"
+	const bool is_pihole_subject = strncasecmp((char*)crt.subject.val.p, "pi.hole", crt.subject.val.len) == 0;
+
+
+	// Free resources
+	mbedtls_x509_crt_free(&crt);
+
+	return is_pihole_issuer && is_pihole_subject;
+}
+
 #else
 
 enum cert_check read_certificate(const char* certfile, const char *domain, const bool private_key)
 {
 	log_err("FTL was not compiled with mbedtls support");
 	return CERT_FILE_NOT_FOUND;
-}
-
-bool init_entropy(void)
-{
-	log_warn("FTL was not compiled with mbedtls support, fallback random number generator not available");
-	return false;
-}
-
-void destroy_entropy(void)
-{
-}
-
-ssize_t drbg_random(unsigned char *output, size_t len)
-{
-	log_warn("FTL was not compiled with mbedtls support, fallback random number generator not available");
-	return -1;
 }
 
 #endif

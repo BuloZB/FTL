@@ -151,7 +151,7 @@ bool compile_regex(const char *regexin, regexData *regex, char **message)
 		// Extract regular expression pattern in front of FTL-specific syntax
 		char *saveptr = NULL;
 		char *part = strtok_r(buf, FTL_REGEX_SEP, &saveptr);
-		strncpy(rgxbuf, part, strlen(regexin));
+		strncpy(rgxbuf, part, strlen(part));
 
 		// Analyze FTL-specific parts
 		while((part = strtok_r(NULL, FTL_REGEX_SEP, &saveptr)) != NULL)
@@ -372,7 +372,7 @@ static int match_regex(const char *input, DNSCacheData *dns_cache, const int cli
 {
 	int match_idx = -1;
 #ifdef USE_TRE_REGEX
-	regmatch_t match[1] = {{ 0 }}; // This also disables any sub-matching
+	regmatch_t match[1] = {}; // This also disables any sub-matching
 #endif
 
 	// Check if we need to recompile regex because they were changed in
@@ -702,13 +702,13 @@ void reload_per_client_regex(clientsData *client)
 	if(num_regex[REGEX_DENY] > 0)
 		gravityDB_get_regex_client_groups(client, num_regex[REGEX_DENY],
 		                                  deny_regex, REGEX_DENY,
-		                                  "vw_regex_blacklist");
+		                                  "vw_regex_denylist");
 
 	// Load regex per-group allow regex for this client
 	if(num_regex[REGEX_ALLOW] > 0)
 		gravityDB_get_regex_client_groups(client, num_regex[REGEX_ALLOW],
 		                                  allow_regex, REGEX_ALLOW,
-		                                  "vw_regex_whitelist");
+		                                  "vw_regex_allowlist");
 }
 
 static void read_regex_table(const enum regex_type regexid)
@@ -720,7 +720,7 @@ static void read_regex_table(const enum regex_type regexid)
 
 	// Get number of lines in the regex table
 	num_regex[regexid] = 0;
-	int count = gravityDB_count(tableID);
+	const int count = gravityDB_count(tableID, false);
 
 	if(count == 0)
 	{

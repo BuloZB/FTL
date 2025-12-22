@@ -98,7 +98,7 @@ static void subnet_match_impl(sqlite3_context *context, int argc, sqlite3_value 
 	// Convert the Internet host address into binary form in network byte order
 	// We use in6_addr as variable type here as it is guaranteed to be large enough
 	// for both, IPv4 and IPv6 addresses (128 bits variable size).
-	struct in6_addr saddrDB = {{{ 0 }}}, saddrFTL = {{{ 0 }}};
+	struct in6_addr saddrDB = {}, saddrFTL = {};
 	if (inet_pton(isIPv6_DB ? AF_INET6 : AF_INET, addrDB, &saddrDB) == 0)
 	{
 		// This may happen when trying to analyze a hostname, skip this entry and return NO MATCH (= 0)
@@ -224,9 +224,6 @@ static int sqlite3_pihole_extensions_init(sqlite3 *db, char **pzErrMsg, const st
 		log_err("Error while initializing the SQLite3 extension isIPv6: %s",
 		        sqlite3_errstr(rc));
 	}
-
-	// Initialize the percentile extension
-	sqlite3_percentile_init(db, pzErrMsg, pApi);
 
 	return rc;
 }

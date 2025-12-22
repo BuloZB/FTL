@@ -103,6 +103,7 @@ enum conf_type {
 #define FLAG_ENV_VAR               (1 << 4)
 #define FLAG_CONF_IMPORTED         (1 << 5)
 #define FLAG_READ_ONLY             (1 << 6)
+#define FLAG_FTL_LOG               (1 << 7)
 
 struct conf_item {
 	const char *k;        // item Key
@@ -141,7 +142,6 @@ struct config {
 		struct conf_item hosts;
 		struct conf_item domainNeeded;
 		struct conf_item expandHosts;
-		struct conf_item domain;
 		struct conf_item bogusPriv;
 		struct conf_item dnssec;
 		struct conf_item interface;
@@ -153,9 +153,14 @@ struct config {
 		struct conf_item localise;
 		struct conf_item revServers;
 		struct {
+			struct conf_item name;
+			struct conf_item local;
+		} domain;
+		struct {
 			struct conf_item size;
 			struct conf_item optimizer;
 			struct conf_item upstreamBlockedTTL;
+			struct conf_item rrtype;
 		} cache;
 		struct {
 			struct conf_item active;
@@ -249,12 +254,14 @@ struct config {
 		struct conf_item threads;
 		struct conf_item headers;
 		struct conf_item serve_all;
+		struct conf_item advancedOpts;
 		struct {
 			struct conf_item timeout;
 			struct conf_item restore;
 		} session;
 		struct {
 			struct conf_item cert;
+			struct conf_item validity;
 		} tls;
 		struct {
 			struct conf_item webroot;
@@ -310,6 +317,8 @@ struct config {
 		struct conf_item dnsmasq_lines;
 		struct conf_item extraLogging;
 		struct conf_item readOnly;
+		struct conf_item normalizeCPU;
+		struct conf_item hide_dnsmasq_warn;
 		struct {
 			struct conf_item load;
 			struct conf_item shmem;
@@ -350,6 +359,7 @@ struct config {
 		struct conf_item reserved;
 		struct conf_item ntp;
 		struct conf_item netlink;
+		struct conf_item timing;
 		// all must be the last item in this struct
 		struct conf_item all;
 	} debug;
@@ -371,7 +381,7 @@ struct conf_item *get_conf_item(struct config *conf, const unsigned int n);
 struct conf_item *get_debug_item(struct config *conf, const enum debug_flag debug);
 unsigned int config_path_depth(char **paths) __attribute__ ((pure));
 void duplicate_config(struct config *dst, struct config *src);
-void free_config(struct config *conf);
+void free_config(struct config *conf, const bool terminating);
 bool compare_config_item(const enum conf_type t, const union conf_value *val1, const union conf_value *val2);
 char **gen_config_path(const char *pathin, const char delim);
 void free_config_path(char **paths);

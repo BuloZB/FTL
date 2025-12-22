@@ -365,7 +365,7 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 		fputs("localise-queries\n", pihole_conf);
 		fputs("\n", pihole_conf);
 	}
-	
+
 	if(conf->dns.queryLogging.v.b)
 	{
 		fputs("# Enable query logging\n", pihole_conf);
@@ -449,13 +449,14 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 	}
 
 	// Check if an explicit interface is configured
-	char *interface = conf->dns.interface.v.s;
+	char interface[MAXIFACESTRLEN];
+	strncpy(interface, conf->dns.interface.v.s, sizeof(interface) - 1);
+	interface[sizeof(interface) - 1] = '\0';
 
 	// If not, get the name of the current gateway (we need to free this
 	// memory later on)
-	const bool interface_allocated = strlen(interface) < 1;
-	if(interface_allocated)
-		interface = get_gateway_name();
+	if(strlen(interface) < 1)
+		get_gateway_name(interface);
 
 	switch(conf->dns.listeningMode.v.listeningMode)
 	{
@@ -537,14 +538,14 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 			fprintf(pihole_conf, "server=/%s/%s\n", domain, target);
 
 			// Check if the configured domain is the same as the main domain
-			if(strlen(config.dns.domain.v.s) > 0 &&
-			   strcasecmp(domain, config.dns.domain.v.s) == 0)
+			if(strlen(config.dns.domain.name.v.s) > 0 &&
+			   strcasecmp(domain, config.dns.domain.name.v.s) == 0)
 				domain_revServer = true;
 
 			// Flag if configured a server for queries for home.arpa domains
 			if(strcmp(domain, "home.arpa") == 0)
 				domain_homearpa = true;
-			
+
 			// Flag if configured a server for queries for .internal domains
 			if(strcmp(domain, "internal") == 0)
 				domain_internal = true;
@@ -588,22 +589,33 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 
 	// Add domain to DNS server. It will also be used for DHCP if the DHCP
 	// server is enabled below
-	if(strlen(conf->dns.domain.v.s) > 0)
+	if(strlen(conf->dns.domain.name.v.s) > 0)
 	{
 		fputs("# DNS domain for both the DNS and DHCP server\n", pihole_conf);
-		if(!domain_revServer)
+		if(domain_revServer || !config.dns.domain.local.v.b)
+		{
+			if(domain_revServer)
+			{
+				fputs("# This DNS domain is also used for reverse lookups\n", pihole_conf);
+				fputs("# It is forwarded to the upstream servers configured above\n", pihole_conf);
+			}
+			else if(!config.dns.domain.local.v.b)
+			{
+				fputs("# This domain is explicitly configured to *not* be local. Ensure\n", pihole_conf);
+				fputs("# that you have configured at least one upstream server for this\n", pihole_conf);
+				fputs("# domain elsewhere to prevent it from being forwarded to the general\n", pihole_conf);
+				fputs("# (probably public) upstream servers\n", pihole_conf);
+			}
+			fputs("# (see server=/<domain>/target above)\n", pihole_conf);
+			fprintf(pihole_conf, "domain=%s\n\n", conf->dns.domain.name.v.s);
+		}
+		else
 		{
 			fputs("# This DNS domain is purely local. FTL may answer queries from\n", pihole_conf);
 			fputs("# /etc/hosts or DHCP but should never forward queries on that\n", pihole_conf);
 			fputs("# domain to any upstream servers\n", pihole_conf);
-			fprintf(pihole_conf, "domain=%s\n", conf->dns.domain.v.s);
-			fprintf(pihole_conf, "local=/%s/\n\n", conf->dns.domain.v.s);
-		}
-		else
-		{
-			fputs("# This DNS domain is also used for reverse lookups\n", pihole_conf);
-			fputs("# (see server=/<domain>/target above)\n", pihole_conf);
-			fprintf(pihole_conf, "domain=%s\n\n", conf->dns.domain.v.s);
+			fprintf(pihole_conf, "domain=%s\n", conf->dns.domain.name.v.s);
+			fprintf(pihole_conf, "local=/%s/\n\n", conf->dns.domain.name.v.s);
 		}
 	}
 
@@ -763,9 +775,9 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 		fputs("\n", pihole_conf);
 	}
 
-	// Add option for caching all DNS records
+	// Add option for which DNS records types to cache
 	fputs("# Cache all DNS records\n", pihole_conf);
-	fputs("cache-rr=ANY\n", pihole_conf);
+	fprintf(pihole_conf, "cache-rr=%s\n\n", conf->dns.cache.rrtype.v.s);
 	fputs("\n", pihole_conf);
 
 	// Add option for PCAP file recording
@@ -809,10 +821,6 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 		}
 		fputs("#### Additional user configuration - END ####\n\n", pihole_conf);
 	}
-
-	// Free memory allocated for interface name
-	if(interface_allocated)
-		free(interface);
 
 	// Flush config file to disk
 	fflush(pihole_conf);
