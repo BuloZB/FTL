@@ -160,6 +160,7 @@ struct config {
 			struct conf_item size;
 			struct conf_item optimizer;
 			struct conf_item upstreamBlockedTTL;
+			struct conf_item rrtype;
 		} cache;
 		struct {
 			struct conf_item active;
@@ -320,6 +321,7 @@ struct config {
 		struct conf_item readOnly;
 		struct conf_item normalizeCPU;
 		struct conf_item hide_dnsmasq_warn;
+		struct conf_item hide_connection_error;
 		struct {
 			struct conf_item load;
 			struct conf_item shmem;
