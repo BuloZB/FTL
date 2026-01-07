@@ -26,7 +26,7 @@
 #include "database/aliasclients.h"
 // Eventqueue routines
 #include "events.h"
-// get_FTL_db_filesize()
+// get_FTL_db_stats()
 #include "files.h"
 // gravity_updated()
 #include "database/gravity-db.h"
@@ -42,21 +42,57 @@ static bool delete_old_queries_in_DB(sqlite3 *db)
 	// Delete old queries from the database but never more than 1% of the
 	// database at once to avoid long blocking times. Check out
 	// https://github.com/pi-hole/FTL/issues/1372 for details.
-	// As deleting database entries happens typically once per minute,
-	// this method could still delete 1440% of the database per day.
-	// Even when the database storing interval is set to 1 hour, this
-	// method would still delete 24% of the database per day so maxDBdays > 4
-	// does still work.
+	// As deleting database entries happens typically once per ten minutes,
+	// this method could still delete 60% of the database per day.
 	const time_t timestamp = time(NULL) - config.database.maxDBdays.v.ui * 86400;
-	SQL_bool(db, "DELETE FROM query_storage WHERE id IN (SELECT id FROM query_storage WHERE timestamp <= %lu LIMIT (SELECT COUNT(*)/100 FROM query_storage));",
-	         (unsigned long)timestamp);
+
+	sqlite3_stmt* stmt;
+	int rc = sqlite3_prepare_v2(db, "DELETE FROM query_storage WHERE id IN (SELECT id FROM query_storage WHERE timestamp <= ? LIMIT ?)", -1, &stmt, NULL);
+	if( rc != SQLITE_OK )
+	{
+		if( rc != SQLITE_BUSY )
+			log_err("Cannot prepare error delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
+		return false;
+	}
+
+	// Bind arguments to prepared statement
+	if((rc = sqlite3_bind_int(stmt, 1, timestamp)) != SQLITE_OK)
+	{
+		log_err("Cannot bind timestamp in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
+		sqlite3_finalize(stmt);
+		return false;
+	}
+	sqlite3_int64 db_num = 0;
+	db_counts(NULL, NULL, &db_num);
+	if((rc = sqlite3_bind_int64(stmt, 2, db_num / 100)) != SQLITE_OK)
+	{
+		log_err("Cannot bind limit in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
+		sqlite3_finalize(stmt);
+		return false;
+	}
+
+	if((rc = sqlite3_step(stmt)) != SQLITE_DONE)
+	{
+		log_err("Cannot step in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
+		sqlite3_finalize(stmt);
+		return false;
+	}
+
+	if((rc = sqlite3_finalize(stmt)) != SQLITE_OK)
+	{
+		log_err("Cannot finalize in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
+		return false;
+	}
 
 	// Get how many rows have been affected (deleted)
 	const int affected = sqlite3_changes(db);
 
 	// Print debug message
-	log_debug(DEBUG_DATABASE, "Size of %s is %.2f MB, deleted %i rows",
-	          config.files.database.v.s, 1e-6*get_FTL_db_filesize(), affected);
+	struct stat st;
+	get_FTL_db_stats(&st);
+	log_debug(DEBUG_DATABASE, "Size of %s is %.2f MB, deleted %i of %lu rows",
+	          config.files.database.v.s, 9.5367431640625e-07*st.st_size,
+	          affected, (long unsigned int)db_num);
 
 	return true;
 }
@@ -92,7 +128,7 @@ static bool analyze_database(sqlite3 *db)
  *
  * @return void
  * @see parse_proc_meminfo(), getProcessMemory(), format_memory_size(),
- *      sqlite3_mem_used(), get_FTL_db_filesize(), get_row_count(), log_debug()
+ *      sqlite3_mem_used(), get_FTL_db_stats(), get_row_count(), log_debug()
  */
 static void log_used_memory(void)
 {
@@ -150,10 +186,11 @@ static void log_used_memory(void)
 	          get_row_count("query_storage", true));
 
 	// Log on-disk database file size
-	const long long db_size = get_FTL_db_filesize();
+	struct stat st;
+	get_FTL_db_stats(&st);
 	char db_size_prefix[2] = { 0 };
 	double db_size_formatted = 0.0;
-	format_memory_size(db_size_prefix, (uint64_t)db_size, &db_size_formatted);
+	format_memory_size(db_size_prefix, st.st_size, &db_size_formatted);
 	log_debug(DEBUG_TIMING, "  SQLite3 (on-disk): %.2f %sB", db_size_formatted, db_size_prefix);
 	log_debug(DEBUG_TIMING, "    Table sizes: "
 	         "domain_by_id=%"PRId64", client_by_id=%"PRId64", forward_by_id=%"PRId64", addinfo_by_id=%"PRId64", query_storage=%"PRId64"",

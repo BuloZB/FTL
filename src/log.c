@@ -415,7 +415,7 @@ void FTL_log_helper(const unsigned int n, ...)
 	free(arg);
 }
 
-void format_memory_size(char prefix[2], const uint64_t bytes, double * const formatted)
+void format_memory_size(char prefix[2], const off_t bytes, double * const formatted)
 {
 	unsigned int i;
 	*formatted = bytes;

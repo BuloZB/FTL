@@ -64,9 +64,12 @@ sqlite3_int64 __attribute__((pure)) get_max_db_idx(void)
 
 void db_counts(sqlite3_int64 *last_idx, sqlite3_int64 *mem_num, sqlite3_int64 *disk_num)
 {
-	*last_idx = last_mem_db_idx;
-	*mem_num = mem_db_num;
-	*disk_num = disk_db_num;
+	if(last_idx != NULL)
+		*last_idx = last_mem_db_idx;
+	if(mem_num != NULL)
+		*mem_num = mem_db_num;
+	if(disk_num != NULL)
+		*disk_num = disk_db_num;
 }
 
 // Initialize in-memory database, add queries table and indices
