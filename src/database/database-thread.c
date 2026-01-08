@@ -39,15 +39,11 @@
 
 static bool delete_old_queries_in_DB(sqlite3 *db)
 {
-	// Delete old queries from the database but never more than 1% of the
-	// database at once to avoid long blocking times. Check out
-	// https://github.com/pi-hole/FTL/issues/1372 for details.
-	// As deleting database entries happens typically once per ten minutes,
-	// this method could still delete 60% of the database per day.
+	// Delete old queries from the database
 	const time_t timestamp = time(NULL) - config.database.maxDBdays.v.ui * 86400;
 
 	sqlite3_stmt* stmt;
-	int rc = sqlite3_prepare_v2(db, "DELETE FROM query_storage WHERE id IN (SELECT id FROM query_storage WHERE timestamp <= ? LIMIT ?)", -1, &stmt, NULL);
+	int rc = sqlite3_prepare_v2(db, "DELETE FROM query_storage WHERE timestamp <= ?", -1, &stmt, NULL);
 	if( rc != SQLITE_OK )
 	{
 		if( rc != SQLITE_BUSY )
@@ -59,14 +55,6 @@ static bool delete_old_queries_in_DB(sqlite3 *db)
 	if((rc = sqlite3_bind_int(stmt, 1, timestamp)) != SQLITE_OK)
 	{
 		log_err("Cannot bind timestamp in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
-		sqlite3_finalize(stmt);
-		return false;
-	}
-	sqlite3_int64 db_num = 0;
-	db_counts(NULL, NULL, &db_num);
-	if((rc = sqlite3_bind_int64(stmt, 2, db_num / 100)) != SQLITE_OK)
-	{
-		log_err("Cannot bind limit in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
 		sqlite3_finalize(stmt);
 		return false;
 	}
@@ -87,12 +75,18 @@ static bool delete_old_queries_in_DB(sqlite3 *db)
 	// Get how many rows have been affected (deleted)
 	const int affected = sqlite3_changes(db);
 
-	// Print debug message
+	// Get size of on-disk database
 	struct stat st;
 	get_FTL_db_stats(&st);
-	log_debug(DEBUG_DATABASE, "Size of %s is %.2f MB, deleted %i of %lu rows",
-	          config.files.database.v.s, 9.5367431640625e-07*st.st_size,
-	          affected, (long unsigned int)db_num);
+
+	// Get total number of rows in on-disk database
+	sqlite3_int64 db_num = 0;
+	db_counts(NULL, NULL, &db_num);
+
+	// Print debug message
+	log_info("Size of %s is %.2f MB, deleted %i of %zu rows",
+	         config.files.database.v.s, 9.5367431640625e-07*st.st_size,
+	         affected, (size_t)db_num);
 
 	return true;
 }
@@ -213,6 +207,7 @@ void *DB_thread(void *val)
 	// to the database
 	time_t before = time(NULL);
 	time_t lastDBsave = before - before%config.database.DBinterval.v.ui;
+	time_t lastDBdelete = before;
 
 	// Add some randomness (between one and two hours) to these timestamps
 	// to avoid them running at the same time and immediately after FTL was
@@ -268,18 +263,6 @@ void *DB_thread(void *val)
 			// Save data to database
 			DBOPEN_OR_AGAIN();
 			TIMED_DB_OP(export_queries_to_disk(false));
-
-			// Intermediate cancellation-point
-			if(killed)
-				break;
-
-			// Check if GC should be done on the database
-			if(DBdeleteoldqueries)
-			{
-				/* No thread locks needed */
-				TIMED_DB_OP(delete_old_queries_in_DB(db));
-				DBdeleteoldqueries = false;
-			}
 			DBCLOSE_OR_BREAK();
 
 			// Parse neighbor cache (fill network table)
@@ -289,6 +272,19 @@ void *DB_thread(void *val)
 		// Intermediate cancellation-point
 		if(killed)
 			break;
+
+		// Delete old queries from the database once per day between 3am
+		// and 4am
+		const struct tm *tm_now = localtime(&now);
+		if(tm_now->tm_hour == 3 && tm_now->tm_min > 0 &&
+		   now - lastDBdelete >= DATABASE_DELETE_OLD_QUERIES_INTERVAL)
+		{
+			// Update lastDBdelete timer to avoid multiple deletions
+			lastDBdelete = now;
+			DBOPEN_OR_AGAIN();
+			TIMED_DB_OP(delete_old_queries_in_DB(db));
+			DBCLOSE_OR_BREAK();
+		}
 
 		// Optimize database once per week
 		if(now - lastAnalyze >= DATABASE_ANALYZE_INTERVAL)
