@@ -275,8 +275,9 @@ void *DB_thread(void *val)
 
 		// Delete old queries from the database once per day between 3am
 		// and 4am
-		const struct tm *tm_now = localtime(&now);
-		if(tm_now->tm_hour == 3 && tm_now->tm_min > 0 &&
+		struct tm tm_now = { 0 };
+		localtime_r(&now, &tm_now);
+		if(tm_now.tm_hour == 3 && tm_now.tm_min > 0 &&
 		   now - lastDBdelete >= DATABASE_DELETE_OLD_QUERIES_INTERVAL)
 		{
 			// Update lastDBdelete timer to avoid multiple deletions
