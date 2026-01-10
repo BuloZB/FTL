@@ -762,6 +762,8 @@ void add_to_fifo_buffer(const enum fifo_logs which, const char *payload, const c
 
 bool flush_dnsmasq_log(void)
 {
+	const double mintime = double_time();
+
 	// Lock shared memory
 	lock_shm();
 
@@ -786,7 +788,6 @@ bool flush_dnsmasq_log(void)
 	unlock_shm();
 
 	// Flush last 24 hours of on-disk database
-	const double mintime = double_time();
 	if(!delete_old_queries_from_db(false, mintime))
 	{
 		log_err("Could not flush on-disk database");

@@ -29,9 +29,9 @@
 static sqlite3 *_memdb = NULL;
 static bool store_in_database = false;
 static double new_last_timestamp = 0;
-static unsigned int new_total = 0, new_blocked = 0;
-static sqlite3_int64 last_mem_db_idx = -1;
-static unsigned int mem_db_num = 0, disk_db_num = 0;
+static uint32_t new_total = 0, new_blocked = 0;
+static int64_t memdb_queries_maxid = -1;
+static uint64_t memdb_queries_count = 0, diskdb_queries_count = 0;
 static sqlite3_stmt *query_stmt = NULL;
 static sqlite3_stmt *domain_stmt = NULL;
 static sqlite3_stmt *client_stmt = NULL;
@@ -59,17 +59,17 @@ static void load_queries_from_disk(void);
 // Return the maximum ID of the in-memory database
 sqlite3_int64 __attribute__((pure)) get_max_db_idx(void)
 {
-	return last_mem_db_idx;
+	return memdb_queries_maxid;
 }
 
 void db_counts(sqlite3_int64 *last_idx, sqlite3_int64 *mem_num, sqlite3_int64 *disk_num)
 {
 	if(last_idx != NULL)
-		*last_idx = last_mem_db_idx;
+		*last_idx = memdb_queries_maxid;
 	if(mem_num != NULL)
-		*mem_num = mem_db_num;
+		*mem_num = memdb_queries_count;
 	if(disk_num != NULL)
-		*disk_num = disk_db_num;
+		*disk_num = diskdb_queries_count;
 }
 
 // Initialize in-memory database, add queries table and indices
@@ -392,8 +392,8 @@ bool get_memdb_size(size_t *memsize, int *queries)
 	*memsize = page_count * page_size;
 
 	// Get number of queries in the memory table
-	if(queries != NULL && (*queries = get_number_of_queries_in_DB(db, "query_storage", NULL)) == DB_FAILED)
-		return false;
+	if(queries != NULL)
+		*queries = memdb_queries_count;
 
 	return true;
 }
@@ -529,9 +529,10 @@ bool detach_database(sqlite3* db, const char **message, const char *alias)
 
 // Get number of queries either in the temp or in the on-disk database
 // This routine is used by the API routines.
-int get_number_of_queries_in_DB(sqlite3 *db, const char *tablename, double *earliest_timestamp)
+uint64_t get_number_of_queries_in_DB(sqlite3 *db, const char *tablename, double *earliest_timestamp)
 {
-	int rc = 0, num = 0;
+	int rc = 0;
+	uint64_t num = 0;
 	sqlite3_stmt *stmt = NULL;
 
 	// The database pointer may be NULL, meaning we want the memdb
@@ -553,19 +554,19 @@ int get_number_of_queries_in_DB(sqlite3 *db, const char *tablename, double *earl
 	}
 
 	rc = sqlite3_prepare_v2(db, querystr, -1, &stmt, NULL);
-	if( rc != SQLITE_OK )
+	if(rc != SQLITE_OK)
 	{
-		if( rc != SQLITE_BUSY )
+		if(rc != SQLITE_BUSY)
 			log_err("get_number_of_queries_in_DB(%s): Prepare error: %s",
 			        tablename, sqlite3_errstr(rc));
 		free(querystr);
-		return false;
+		return 0;
 	}
 	rc = sqlite3_step(stmt);
-	if( rc == SQLITE_ROW )
+	if(rc == SQLITE_ROW)
 	{
 		// Get count from first column
-		num = sqlite3_column_int(stmt, 0);
+		num = sqlite3_column_int64(stmt, 0);
 		// Get timestamp from second column if requested
 		if(earliest_timestamp != NULL && sqlite3_column_type(stmt, 1) != SQLITE_NULL)
 			*earliest_timestamp = sqlite3_column_double(stmt, 1);
@@ -654,10 +655,10 @@ bool import_queries_from_disk(void)
 	}
 
 	// Get number of queries on disk before detaching
-	disk_db_num = get_number_of_queries_in_DB(memdb, "disk.query_storage", NULL);
-	mem_db_num = get_number_of_queries_in_DB(memdb, "query_storage", NULL);
+	diskdb_queries_count = get_number_of_queries_in_DB(memdb, "disk.query_storage", NULL);
+	memdb_queries_count = get_number_of_queries_in_DB(memdb, "query_storage", NULL);
 
-	log_info("Imported %u queries from the on-disk database (it has %u rows)", mem_db_num, disk_db_num);
+	log_info("Imported %"PRIu64" queries from the on-disk database (it has %"PRIu64" rows)", memdb_queries_count, diskdb_queries_count);
 
 	return okay;
 }
@@ -689,8 +690,8 @@ bool export_queries_to_disk(const bool final)
 	// Only store queries if database.maxDBdays > 0
 	if(config.database.maxDBdays.v.ui > 0)
 	{
-		log_debug(DEBUG_DATABASE, "Storing queries on disk WHERE timestamp < %f (last_mem_db_idx = %lld)",
-		          time, last_mem_db_idx);
+		log_debug(DEBUG_DATABASE, "Storing queries on disk WHERE timestamp < %f (memdb_queries_maxid = %"PRId64")",
+		          time, memdb_queries_maxid);
 
 		// Bind upper time limit
 		// This prevents queries from the last 30 seconds from being stored
@@ -723,31 +724,34 @@ bool export_queries_to_disk(const bool final)
 		 * 2. Update the total queries counter in the `disk.counters` table.
 		 * 3. Update the blocked queries counter in the `disk.counters` table.
 		 *
-		 * Note that new_total does not need to match the total number of
-		 * insertions here as storing queries to the database happens
-		 * time-delayed. In the end, the total number of queries will be
-		 * correct (after final synchronization during FTL shutdown).
+		 * Note that <new_total> does not need to match the total number
+		 * of insertions (stored in <insertions>) here as storing
+		 * queries to the database happens time-delayed. In the end, the
+		 * total number of queries will be correct (after final
+		 * synchronization during FTL shutdown).
 		 */
 		if(insertions > 0)
 		{
+			// Update number of queries in the disk database (actual number of insertions)
+			diskdb_queries_count += insertions;
+
 			if((rc = dbquery(memdb, "INSERT OR REPLACE INTO disk.ftl (id, value) VALUES ( %i, %f );", DB_LASTTIMESTAMP, new_last_timestamp)) != SQLITE_OK)
 				log_err("export_queries_to_disk(): Cannot update timestamp: %s", sqlite3_errstr(rc));
 
-			if((rc = dbquery(memdb, "UPDATE disk.counters SET value = value + %u WHERE id = %i;", new_total, DB_TOTALQUERIES)) != SQLITE_OK)
+			// Use <new_total> and <new_blocked> counters to update
+			// the respective counters in the on-disk database
+			if(!db_update_disk_counter(memdb, DB_TOTALQUERIES, new_total))
 				log_err("export_queries_to_disk(): Cannot update total queries counter: %s", sqlite3_errstr(rc));
 			else
 				// Success
 				new_total = 0;
 
-			if((rc = dbquery(memdb, "UPDATE disk.counters SET value = value + %u WHERE id = %i;", new_blocked, DB_BLOCKEDQUERIES)) != SQLITE_OK)
+			if(!db_update_disk_counter(memdb, DB_BLOCKEDQUERIES, new_blocked))
 				log_err("export_queries_to_disk(): Cannot update blocked queries counter: %s", sqlite3_errstr(rc));
 			else
 				// Success
 				new_blocked = 0;
 		}
-
-		// Update number of queries in the disk database
-		disk_db_num = get_number_of_queries_in_DB(memdb, "disk.query_storage", NULL);
 	}
 
 	// Export linking tables and current AUTOINCREMENT values to the disk database
@@ -778,7 +782,8 @@ bool export_queries_to_disk(const bool final)
 	return okay;
 }
 
-// Delete queries older than given timestamp. Used by garbage collection
+// Delete queries older than given timestamp. Used by garbage collection and
+// database thread.
 bool delete_old_queries_from_db(const bool use_memdb, const double mintime)
 {
 	// Get time stamp 24 hours (or what was configured) in the past
@@ -795,14 +800,16 @@ bool delete_old_queries_from_db(const bool use_memdb, const double mintime)
 	sqlite3_stmt *stmt = NULL;
 	int rc = sqlite3_prepare_v2(db, querystr, -1, &stmt, NULL);
 	if( rc != SQLITE_OK ){
-		log_err("delete_old_queries_from_db(): SQL error prepare: %s", sqlite3_errstr(rc));
+		log_err("delete_old_queries_from_db(%s): SQL error prepare: %s",
+		        use_memdb ? "memdb" : "disk", sqlite3_errstr(rc));
 		return false;
 	}
 
 	// Bind index
 	if((rc = sqlite3_bind_double(stmt, 1, mintime)) != SQLITE_OK)
 	{
-		log_err("delete_old_queries_from_db(): Failed to bind mintime: %s", sqlite3_errstr(rc));
+		log_err("delete_old_queries_from_db(%s): Failed to bind mintime: %s",
+		        use_memdb ? "memdb" : "disk", sqlite3_errstr(rc));
 		sqlite3_finalize(stmt);
 		return false;
 	}
@@ -811,20 +818,38 @@ bool delete_old_queries_from_db(const bool use_memdb, const double mintime)
 	if((rc = sqlite3_step(stmt)) == SQLITE_DONE)
 		okay = true;
 	else
-		log_err("delete_old_queries_from_db(): Failed to delete queries with timestamp >= %f: %s",
-		        mintime, sqlite3_errstr(rc));
+		log_err("delete_old_queries_from_db(%s): Failed to delete queries with timestamp >= %f: %s",
+		        use_memdb ? "memdb" : "disk", mintime, sqlite3_errstr(rc));
 
-	// Update number of queries in in-memory database
-	const int new_num = get_number_of_queries_in_DB(NULL, "query_storage", NULL);
-	log_debug(DEBUG_GC, "delete_old_queries_from_db(): Deleted %i (%u) queries, new number of queries in memory: %i",
-	          sqlite3_changes(db), (mem_db_num - new_num), new_num);
-	mem_db_num = new_num;
+	const int64_t deleted = sqlite3_changes64(db);
+	if(okay)
+	{
+		// Update number of queries in either in-memory or on-disk
+		// database (depending on what was cleaned)
+		if(use_memdb)
+			memdb_queries_count -= deleted;
+		else
+			diskdb_queries_count -= deleted;
+	}
 
 	// Finalize statement
 	sqlite3_finalize(stmt);
 
+	// Add additional logging and close on-disk database if used
 	if(!use_memdb)
+	{
+		// Get size of on-disk database
+		struct stat st;
+		get_FTL_db_stats(&st);
+
+		// Log size of database and number of deleted rows
+		log_info("Size of %s is %.2f MB, deleted %"PRId64" of %"PRIu64" rows",
+			config.files.database.v.s, 9.5367431640625e-07*st.st_size,
+			deleted, diskdb_queries_count);
+
+		// Close on-disk database
 		dbclose(&db);
+	}
 
 	return okay;
 }
@@ -1443,7 +1468,7 @@ void init_disk_db_idx(void)
 	// assume any index
 	if(FTLDBerror())
 	{
-		last_mem_db_idx = -1;
+		memdb_queries_maxid = -1;
 		return;
 	}
 
@@ -1459,13 +1484,13 @@ void init_disk_db_idx(void)
 	{
 		// We need to check that the returned value is not NULL (happens
 		// when there are no rows in the table). If it is NULL, we set
-		// last_mem_db_idx to -1 so that the next query will be stored
-		// with index 0. If it is not NULL, we set last_mem_db_idx to
+		// memdb_queries_maxid to -1 so that the next query will be stored
+		// with index 0. If it is not NULL, we set memdb_queries_maxid to
 		// the returned value.
 		if(sqlite3_column_type(stmt, 0) == SQLITE_INTEGER)
-			last_mem_db_idx = sqlite3_column_int64(stmt, 0);
+			memdb_queries_maxid = sqlite3_column_int64(stmt, 0);
 		else
-			last_mem_db_idx = -1;
+			memdb_queries_maxid = -1;
 	}
 	else
 		log_err("init_disk_db_idx(): Failed to get MAX(id) from disk.query_storage: %s",
@@ -1474,7 +1499,7 @@ void init_disk_db_idx(void)
 	// Finalize statement
 	sqlite3_finalize(stmt);
 
-	log_debug(DEBUG_DATABASE, "Last long-term idx is %lld", last_mem_db_idx);
+	log_debug(DEBUG_DATABASE, "Last long-term idx is %"PRId64, memdb_queries_maxid);
 }
 
 bool queries_to_database(void)
@@ -1563,7 +1588,7 @@ bool queries_to_database(void)
 		else
 		{
 			// We create a new query
-			idx = last_mem_db_idx + 1;
+			idx = memdb_queries_maxid + 1;
 		}
 
 		log_debug(DEBUG_DATABASE, "Storing query ID %u in in-memory-database with idx %lld (old idx %lld)",
@@ -1760,10 +1785,9 @@ bool queries_to_database(void)
 		{
 			// Store database index for this query (in case we need to
 			// update it later on)
-			query->db = ++last_mem_db_idx;
+			query->db = ++memdb_queries_maxid;
 
 			// Total counter information (delta computation)
-			new_total++;
 			if(query->flags.blocked)
 				new_blocked++;
 
@@ -1780,11 +1804,13 @@ bool queries_to_database(void)
 		query->flags.database.changed = false;
 	}
 
+	// Update number of queries in in-memory database and memorize how many
+	// queries will be added to the on-disk database later on
+	memdb_queries_count += added;
+	new_total += added;
+
 	// Release shared memory before committing transaction
 	unlock_shm();
-
-	// Update number of queries in in-memory database
-	mem_db_num = get_number_of_queries_in_DB(NULL, "query_storage", NULL);
 
 	if(config.debug.database.v.b && updated + added > 0)
 	{

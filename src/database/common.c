@@ -793,12 +793,73 @@ bool db_set_FTL_property(sqlite3 *db, const enum ftl_table_props ID, const int v
 
 bool db_set_counter(sqlite3 *db, const enum counters_table_props ID, const int value)
 {
-	int ret = dbquery(db, "INSERT OR REPLACE INTO counters (id, value) VALUES ( %u, %d );", ID, value);
+	sqlite3_stmt *stmt = NULL;
+	int ret = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO counters (id, value) VALUES (?,?)", -1, &stmt, NULL);
 	if(ret != SQLITE_OK)
 	{
 		checkFTLDBrc(ret);
 		return false;
 	}
+	ret = sqlite3_bind_int(stmt, 1, ID);
+	if(ret != SQLITE_OK)
+	{
+		checkFTLDBrc(ret);
+		sqlite3_finalize(stmt);
+		return false;
+	}
+	ret = sqlite3_bind_int(stmt, 2, value);
+	if(ret != SQLITE_OK)
+	{
+		checkFTLDBrc(ret);
+		sqlite3_finalize(stmt);
+		return false;
+	}
+
+	ret = sqlite3_step(stmt);
+	if(ret != SQLITE_DONE)
+	{
+		checkFTLDBrc(ret);
+		sqlite3_finalize(stmt);
+		return false;
+	}
+
+	sqlite3_finalize(stmt);
+	return true;
+}
+
+bool db_update_disk_counter(sqlite3 *db, const enum counters_table_props ID, const int change)
+{
+	sqlite3_stmt *stmt = NULL;
+	int ret = sqlite3_prepare_v2(db, "UPDATE counters SET value = value + ? WHERE id = ?", -1, &stmt, NULL);
+	if(ret != SQLITE_OK)
+	{
+		checkFTLDBrc(ret);
+		return false;
+	}
+	ret = sqlite3_bind_int(stmt, 1, ID);
+	if(ret != SQLITE_OK)
+	{
+		checkFTLDBrc(ret);
+		sqlite3_finalize(stmt);
+		return false;
+	}
+	ret = sqlite3_bind_int(stmt, 2, change);
+	if(ret != SQLITE_OK)
+	{
+		checkFTLDBrc(ret);
+		sqlite3_finalize(stmt);
+		return false;
+	}
+
+	ret = sqlite3_step(stmt);
+	if(ret != SQLITE_DONE)
+	{
+		checkFTLDBrc(ret);
+		sqlite3_finalize(stmt);
+		return false;
+	}
+
+	sqlite3_finalize(stmt);
 	return true;
 }
 

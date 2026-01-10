@@ -37,60 +37,6 @@
 // PRId64
 #include <inttypes.h>
 
-static bool delete_old_queries_in_DB(sqlite3 *db)
-{
-	// Delete old queries from the database
-	const time_t timestamp = time(NULL) - config.database.maxDBdays.v.ui * 86400;
-
-	sqlite3_stmt* stmt;
-	int rc = sqlite3_prepare_v2(db, "DELETE FROM query_storage WHERE timestamp <= ?", -1, &stmt, NULL);
-	if( rc != SQLITE_OK )
-	{
-		if( rc != SQLITE_BUSY )
-			log_err("Cannot prepare error delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
-		return false;
-	}
-
-	// Bind arguments to prepared statement
-	if((rc = sqlite3_bind_int(stmt, 1, timestamp)) != SQLITE_OK)
-	{
-		log_err("Cannot bind timestamp in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
-		sqlite3_finalize(stmt);
-		return false;
-	}
-
-	if((rc = sqlite3_step(stmt)) != SQLITE_DONE)
-	{
-		log_err("Cannot step in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
-		sqlite3_finalize(stmt);
-		return false;
-	}
-
-	if((rc = sqlite3_finalize(stmt)) != SQLITE_OK)
-	{
-		log_err("Cannot finalize in delete_old_queries_in_DB(): %s", sqlite3_errstr(rc));
-		return false;
-	}
-
-	// Get how many rows have been affected (deleted)
-	const int affected = sqlite3_changes(db);
-
-	// Get size of on-disk database
-	struct stat st;
-	get_FTL_db_stats(&st);
-
-	// Get total number of rows in on-disk database
-	sqlite3_int64 db_num = 0;
-	db_counts(NULL, NULL, &db_num);
-
-	// Print debug message
-	log_info("Size of %s is %.2f MB, deleted %i of %zu rows",
-	         config.files.database.v.s, 9.5367431640625e-07*st.st_size,
-	         affected, (size_t)db_num);
-
-	return true;
-}
-
 static bool analyze_database(sqlite3 *db)
 {
 	// Optimize the database by running ANALYZE
@@ -203,6 +149,9 @@ void *DB_thread(void *val)
 	// Set thread name
 	prctl(PR_SET_NAME, thread_names[DB], 0, 0, 0);
 
+	// Random minute for daily cleaning task between 3:10 and 3:50 am
+	const int cleaning_minute = 10u + (rand() % 40);
+
 	// Save timestamp as we do not want to store immediately
 	// to the database
 	time_t before = time(NULL);
@@ -277,13 +226,14 @@ void *DB_thread(void *val)
 		// and 4am
 		struct tm tm_now = { 0 };
 		localtime_r(&now, &tm_now);
-		if(tm_now.tm_hour == 3 && tm_now.tm_min > 0 &&
+		if(tm_now.tm_hour == 3 && tm_now.tm_min > cleaning_minute &&
 		   now - lastDBdelete >= DATABASE_DELETE_OLD_QUERIES_INTERVAL)
 		{
 			// Update lastDBdelete timer to avoid multiple deletions
 			lastDBdelete = now;
+			const double mintime = now - (double)(config.database.maxDBdays.v.ui * 86400);
 			DBOPEN_OR_AGAIN();
-			TIMED_DB_OP(delete_old_queries_in_DB(db));
+			TIMED_DB_OP(delete_old_queries_from_db(false, mintime));
 			DBCLOSE_OR_BREAK();
 		}
 
