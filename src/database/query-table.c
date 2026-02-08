@@ -32,6 +32,7 @@ static double new_last_timestamp = 0;
 static uint32_t new_total = 0, new_blocked = 0;
 static int64_t memdb_queries_maxid = -1;
 static uint64_t memdb_queries_count = 0, diskdb_queries_count = 0;
+static double memdb_earliest_timestamp = 0, diskdb_earliest_timestamp = 0;
 static sqlite3_stmt *query_stmt = NULL;
 static sqlite3_stmt *domain_stmt = NULL;
 static sqlite3_stmt *client_stmt = NULL;
@@ -527,9 +528,9 @@ bool detach_database(sqlite3* db, const char **message, const char *alias)
 	return okay;
 }
 
-// Get number of queries either in the temp or in the on-disk database
+// Get number of queries either in the mem or in the on-disk database
 // This routine is used by the API routines.
-uint64_t get_number_of_queries_in_DB(sqlite3 *db, const char *tablename, double *earliest_timestamp)
+static uint64_t get_number_of_queries_in_DB(sqlite3 *db, const char *tablename, double *earliest_timestamp)
 {
 	int rc = 0;
 	uint64_t num = 0;
@@ -542,16 +543,7 @@ uint64_t get_number_of_queries_in_DB(sqlite3 *db, const char *tablename, double 
 	// Build query string based on whether we need the earliest timestamp too
 	const size_t buflen = 38 + strlen(tablename);
 	char *querystr = calloc(buflen, sizeof(char));
-	if(earliest_timestamp != NULL)
-	{
-		// Get both count and earliest timestamp
-		snprintf(querystr, buflen, "SELECT COUNT(*), MIN(timestamp) FROM %s", tablename);
-	}
-	else
-	{
-		// Get only count
-		snprintf(querystr, buflen, "SELECT COUNT(*) FROM %s", tablename);
-	}
+	snprintf(querystr, buflen, "SELECT COUNT(*), MIN(timestamp) FROM %s", tablename);
 
 	rc = sqlite3_prepare_v2(db, querystr, -1, &stmt, NULL);
 	if(rc != SQLITE_OK)
@@ -568,13 +560,39 @@ uint64_t get_number_of_queries_in_DB(sqlite3 *db, const char *tablename, double 
 		// Get count from first column
 		num = sqlite3_column_int64(stmt, 0);
 		// Get timestamp from second column if requested
-		if(earliest_timestamp != NULL && sqlite3_column_type(stmt, 1) != SQLITE_NULL)
-			*earliest_timestamp = sqlite3_column_double(stmt, 1);
+		*earliest_timestamp = sqlite3_column_double(stmt, 1);
 	}
 	sqlite3_finalize(stmt);
 	free(querystr);
 
 	return num;
+}
+
+/**
+ * @brief Retrieve query count and earliest timestamp from the selected database.
+ *
+ * @param disk If true, read values from the on-disk database; if false, read from the in-memory database.
+ * @param[out] count Pointer to a uint64_t that will be set to the number of stored queries. Must not be NULL.
+ * @param[out] earliest_timestamp Pointer to a double that will be set to the earliest query timestamp. Must not be NULL.
+ *
+ * Populates the provided output parameters with the corresponding values from the chosen database.
+ */
+void get_db_info(const bool disk, uint64_t *count, double *earliest_timestamp)
+{
+	if(disk)
+	{
+		if(count != NULL)
+			*count = diskdb_queries_count;
+		if(earliest_timestamp != NULL)
+			*earliest_timestamp = diskdb_earliest_timestamp;
+	}
+	else
+	{
+		if(count != NULL)
+			*count = memdb_queries_count;
+		if(earliest_timestamp != NULL)
+			*earliest_timestamp = memdb_earliest_timestamp;
+	}
 }
 
 // Read queries from the on-disk database into the in-memory database (after
@@ -655,8 +673,8 @@ bool import_queries_from_disk(void)
 	}
 
 	// Get number of queries on disk before detaching
-	diskdb_queries_count = get_number_of_queries_in_DB(memdb, "disk.query_storage", NULL);
-	memdb_queries_count = get_number_of_queries_in_DB(memdb, "query_storage", NULL);
+	diskdb_queries_count = get_number_of_queries_in_DB(memdb, "disk.query_storage", &diskdb_earliest_timestamp);
+	memdb_queries_count = get_number_of_queries_in_DB(memdb, "query_storage", &memdb_earliest_timestamp);
 
 	log_info("Imported %"PRIu64" queries from the on-disk database (it has %"PRIu64" rows)", memdb_queries_count, diskdb_queries_count);
 
@@ -834,6 +852,12 @@ bool delete_old_queries_from_db(const bool use_memdb, const double mintime)
 
 	// Finalize statement
 	sqlite3_finalize(stmt);
+
+	// Update earliest timestamp in the database after deletion
+	if(use_memdb)
+		memdb_earliest_timestamp = mintime;
+	else
+		diskdb_earliest_timestamp = mintime;
 
 	// Add additional logging and close on-disk database if used
 	if(!use_memdb)
