@@ -582,13 +582,17 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 	}
 
 	// Ensure that internal domains (Internet-Draft
-	// draft-davies-internal-tld-05) are not sent upstream, unless
-	// explicitly configured by user as local domain with either:
-	//  - revServer entry for "internal" (revServer_internal), or
-	//  - dns.domain == "internal" AND dns.domain.local == false
+	// draft-davies-internal-tld-05) are not forwarded to upstream servers
+	// by default. However, we skip adding the protection when the user has
+	// explicitly configured an exception. The exceptions are:
+	//  - a reverse server has been configured for the "internal" TLD
+	//    (revServer_internal == true), OR
+	//  - the configured DNS domain equals "internal" and that domain is
+	//    explicitly marked non-local (domain_internal == true &&
+	//    config.dns.domain.local.v.b == false).
 	const bool domain_internal = strlen(conf->dns.domain.name.v.s) > 0 &&
 	                             strcasecmp(conf->dns.domain.name.v.s, "internal") == 0;
-	if (!revServer_internal && !domain_internal && !config.dns.domain.local.v.b)
+	if (!revServer_internal && !(domain_internal && config.dns.domain.local.v.b == false))
 	{
 		fputs("# Do not forward .internal domains to upstream servers\n",pihole_conf);
 		fputs("local=/internal/\n\n",pihole_conf);
