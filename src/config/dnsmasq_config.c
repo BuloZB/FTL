@@ -569,15 +569,30 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 		fputs("local=//\n\n", pihole_conf);
 	}
 
-	// Ensure that home.arpa domains (RFC 8375) are not sent upstream,
-	// unless explicitly configured by user as local domain with either:
-	//  - revServer entry for "home.arpa" (revServer_homearpa), or
-	//  - dns.domain == "home.arpa" AND dns.domain.local == false
+	// Ensure that home.arpa domains (RFC 8375) are not forwarded to
+	// upstream servers by default. However, we skip adding the protection
+	// when the user has explicitly configured an exception. The exceptions
+	// are:
+	//  - a reverse server has been configured for the "home.arpa" TLD, OR
+	//  - the configured DNS domain equals "home.arpa" and that domain is
+	//    explicitly marked non-local.
 	const bool domain_homearpa = strlen(conf->dns.domain.name.v.s) > 0 &&
 	                             strcasecmp(conf->dns.domain.name.v.s, "home.arpa") == 0;
-	if (!revServer_homearpa && !domain_homearpa && !config.dns.domain.local.v.b)
+	if(revServer_homearpa)
 	{
-		fputs("# Do not forward home.arpa domains to upstream servers\n",pihole_conf);
+		fputs("# A reverse server is configured for \"home.arpa\".\n", pihole_conf);
+		fputs("# All queries for this domain will be forwarded to this\n", pihole_conf);
+		fputs("# upstream server\n\n", pihole_conf);
+	}
+	else if(domain_homearpa && !config.dns.domain.local.v.b)
+	{
+		fputs("# The configured DNS domain is \"home.arpa\" and is explicitly\n", pihole_conf);
+		fputs("# marked non-local. Pi-hole will be forwarding queries for this\n", pihole_conf);
+		fputs("# domain to upstream servers.\n\n", pihole_conf);
+	}
+	else
+	{
+		fputs("# Do not forward .home.arpa domains to upstream servers\n",pihole_conf);
 		fputs("local=/home.arpa/\n\n",pihole_conf);
 	}
 
@@ -585,14 +600,24 @@ bool __attribute__((nonnull(1,3))) write_dnsmasq_config(struct config *conf, boo
 	// draft-davies-internal-tld-05) are not forwarded to upstream servers
 	// by default. However, we skip adding the protection when the user has
 	// explicitly configured an exception. The exceptions are:
-	//  - a reverse server has been configured for the "internal" TLD
-	//    (revServer_internal == true), OR
+	//  - a reverse server has been configured for the "internal" TLD, OR
 	//  - the configured DNS domain equals "internal" and that domain is
-	//    explicitly marked non-local (domain_internal == true &&
-	//    config.dns.domain.local.v.b == false).
+	//    explicitly marked non-local.
 	const bool domain_internal = strlen(conf->dns.domain.name.v.s) > 0 &&
 	                             strcasecmp(conf->dns.domain.name.v.s, "internal") == 0;
-	if (!revServer_internal && !(domain_internal && config.dns.domain.local.v.b == false))
+	if(revServer_internal)
+	{
+		fputs("# A reverse server is configured for \"internal\".\n", pihole_conf);
+		fputs("# All queries for this domain will be forwarded to this\n", pihole_conf);
+		fputs("# upstream server\n\n", pihole_conf);
+	}
+	else if(domain_internal && !config.dns.domain.local.v.b)
+	{
+		fputs("# The configured DNS domain is \"internal\" and is explicitly\n", pihole_conf);
+		fputs("# marked non-local. Pi-hole will be forwarding queries for this\n", pihole_conf);
+		fputs("# domain to upstream servers.\n\n", pihole_conf);
+	}
+	else
 	{
 		fputs("# Do not forward .internal domains to upstream servers\n",pihole_conf);
 		fputs("local=/internal/\n\n",pihole_conf);
